@@ -275,7 +275,7 @@ department, role, level, manager and pay, and the source of SCD Type 2.
 | business_travel | VARCHAR(20) | CHECK IN ('Non-Travel','Travel_Rarely','Travel_Frequently') |
 | change_reason | VARCHAR(20) | CHECK IN ('Hire','Promotion','Transfer','Role Change','Salary Revision','Manager Change') |
 | effective_start_date | DATE | UQ with employee_id |
-| effective_end_date | DATE NULL | NULL = current version; CHECK end > start |
+| effective_end_date | DATE NULL | **exclusive** (half-open period `[start, end)`): equals the next version's start date; NULL = current version; CHECK end > start |
 | current_version_key | INT UNSIGNED NULL | GENERATED: employee_id when end date is NULL, else NULL; **UNIQUE** → at most one current version per employee |
 | created_at | DATETIME | audit |
 

@@ -173,3 +173,57 @@ Full design: [`docs/oltp_design.md`](oltp_design.md).
   an explicit orthogonal path through the empty gaps between tables.
 - **Review round 3:** rendered correctly in draw.io — types on one line, no overlapping text, routed
   line clear of all tables. **ER diagram approved.**
+- Committed to `feature/database-design` (profiling script, OLTP design, ER diagram, journal).
+
+## Step 9 — Phase 1: Dimensional model / star schema (`hr_dw`)
+
+1. **Method:** Kimball's four-step dimensional design — business process → grain → dimensions →
+   facts — followed by SCD strategy, surrogate keys and a check against every required dashboard.
+2. **Measured before designing** (from the IBM tenure columns): an average of **3.0 job versions per
+   employee** (→ `dim_employee` ≈ 300K rows) and **4.77 review-years per employee** in 2019–2025
+   (→ fact ≈ 477K rows). Low satisfaction sharply raises attrition (WorkLifeBalance 1 → 31.2 %,
+   EnvironmentSatisfaction 1 → 25.4 %, JobSatisfaction 1 → 22.8 %), so survey measures must reach
+   the warehouse.
+3. **Proposal:** grain = one row per performance review; `fact_performance_reviews` with four
+   dimensions (`dim_employee` SCD Type 2, `dim_department`, `dim_project`, `dim_date`); survey scores
+   as measures in the same fact; point-in-time surrogate-key lookup for historically correct reporting.
+4. **Special-member review:** the first proposal placed an "Unknown" row (sk = 0) in every
+   dimension. On review it was narrowed: only `project_sk` is legitimately optional, so only
+   `dim_project` gets a special member, with key **−1** (MySQL's AUTO_INCREMENT treats an inserted
+   0 as "generate next value" unless `NO_AUTO_VALUE_ON_ZERO` is set). All other foreign keys are
+   mandatory; failed lookups go to an `etl_rejected_rows` table instead of a fake key, which keeps
+   headcounts correct and data errors visible.
+5. **Decisions approved:** D6 atomic review grain · D7 survey measures in the fact · D8 SCD2 tracks
+   every job-history attribute (1 : 1 with OLTP versions) · D9 Indian fiscal year in `dim_date` ·
+   D10 `dim_project` Type 1 · D11 special member only in `dim_project` (−1) · D12 declared foreign
+   keys · D13 no PII in the warehouse · D14 inclusive end dates in the warehouse (half-open in OLTP).
+6. Clarified in the OLTP design that `effective_end_date` is exclusive (half-open periods).
+
+Full design: [`docs/dw_design.md`](dw_design.md).
+
+## Step 10 — Star schema diagram
+
+- Editable draw.io diagram: [`diagrams/dw_star_schema.drawio`](../diagrams/dw_star_schema.drawio)
+  — fact table at the centre, four dimensions, two ETL metadata tables; 105 columns.
+  Type 2 attributes are tinted yellow and SCD control columns pink; markers T1 / T2 / NK / DD / M
+  show each column's role.
+- Verified before use: XML well-formed, no duplicate IDs, all relationships connect existing
+  columns, no overlapping elements.
+- **Review round 1:** content correct. One layout flaw: the `department_sk` line crossed the
+  `date_sk` line. Fixed by swapping the positions of `dim_date` (now top) and `dim_department`
+  (now middle), so the fact's lines fan out without crossing.
+- **Review round 2:** rendered correctly — no crossing lines. **Star schema diagram approved.**
+
+## Step 11 — Design questions answered and documented
+
+Two questions raised during the star-schema review were answered and written into the design
+document for the final report:
+
+1. **Why a star schema and not a snowflake?** — new section 3 of `dw_design.md`: comparison table
+   (joins, speed, SQL simplicity, storage, SCD2 behaviour), a worked query (2 joins vs 5), why
+   normalization belongs in OLTP rather than the warehouse, and when a snowflake *would* be
+   right. Recorded as decision **D15**.
+2. **Why not sk = 0 for missing foreign keys?** — section 9 of `dw_design.md` expanded: three
+   options compared (NULL FKs, sk = 0 in every dimension, targeted special member), with the
+   concrete problems of each — silently dropped rows, inflated headcounts, distorted averages,
+   hidden data errors, meaningless SCD columns, and MySQL's AUTO_INCREMENT treatment of 0.
