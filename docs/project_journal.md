@@ -275,6 +275,81 @@ arrive with the synthesizer).
 **Agreed for the end of the project:** both draw.io diagrams will be re-rendered once more from the
 final files and checked against the final schema.
 
+- Committed to `feature/database-ddl`; **PR #3** opened and merged into `main`.
+
+## Step 13 — Phase 1: Data synthesizer design (branch `feature/data-synthesizer`)
+
+**Measured before designing:**
+- NumCompaniesWorked: every "0" has prior experience (median 1 year); 474 of 521 "1"s have none
+  → the field counts the current employer and "0" is a coding error.
+- Of 1,291 promoted employees, 851 rose a level; for **310 (21.1 %)** the previous level would
+  fall below their role's minimum while their current role started *before* the promotion —
+  a direct conflict between IBM's tenure columns and the role level ranges.
+- 245 promotions coincide with a role change; 485 manager changes coincide with a role change.
+- Early-tenure attrition: 29.8 % within the first two years vs 12.0 % afterwards.
+
+**Decisions approved** (full rationale and a Q&A section in
+[`docs/synthesizer_design.md`](synthesizer_design.md)):
+
+| ID | Decision |
+|---|---|
+| D16 | Stratified bootstrap with bounded jitter (keeps real attribute combinations and correlations) |
+| D17 | Snapshot 2026-06-30; review cycles 2019–2025 held Jan–Mar of the next year; surveys Sep–Oct; exits spread 2019 → snapshot |
+| D18 | Conflict resolved with **pay-grade promotions** (consistent with finding F8): 100 % of IBM tenure values kept, no business rule broken |
+| D19 | NumCompaniesWorked cleaning rule; applied in SQL during the staging → OLTP load |
+| D20 | Faker locale `en_IN` (consistent with the Indian fiscal year) |
+| D21 | Small, counted data-quality issues planted in staging so the SQL cleaning can be proven |
+| D22 | `db_manager.py` (Singleton, shared pool) built now for the loader and reused in Phase 3 |
+
+Guiding principle: the synthesizer imitates the legacy source system (raw labels, business keys,
+original quirks); all cleaning and transformation happen in SQL.
+
+## Step 14 — Data synthesizer implementation
+
+**Built** (object-oriented package `src/synthesizer/`): `SynthesizerConfig`, an abstract
+`BaseGenerator`, `IBMSourceData`, `EmployeeGenerator`, `JobHistoryGenerator`, `SurveyGenerator`,
+`ReviewGenerator`, `ProjectGenerator`, `AssignmentGenerator`, `AnomalyInjector`,
+`SyntheticDataset`, `SynthesisValidator`, `StagingLoader`, and the `SynthesisPipeline` CLI
+(`python -m src.synthesizer.run`). Also `src/db_manager.py` (the `DatabaseConnection` Singleton
+with one shared pool — each subclass is itself a Singleton) and `src/exceptions.py`, plus
+`sql/06_staging_ddl.sql` (six permissive staging tables).
+
+**Approach:** build small, measure, fix, scale up — 3,000 → 5,000 → 20,000 → 100,000 employees,
+with the validator checking 33 business rules on every run.
+
+**Problems found and fixed along the way** (details: `synthesizer_design.md` §4b):
+- Long careers started implausibly senior (6.1 % hired into level 3+ with ≤ 2 years' experience)
+  → new decision **D24** "career depth": earlier promotions before the first IBM-dated event,
+  junior-capable previous roles; reduced to ~1 % with every IBM tenure value unchanged.
+- Consistency with the future SQL view: promotion label priority (I1), transfers only where IBM's
+  manager dates allow (I2), transfers must change role (I3), previous manager excluded (I4).
+- A level-5 R&D Manager had no possible transfer target → crash on an empty choice; fixed with a
+  same-department fallback.
+- Invalid fallback managers (I5) and a leap-year edge case at age 18 (I6) — both caught by the
+  validator, both fixed.
+- Assignments: 45 % of reviews without a project, then 58 % over-allocated, then a retroactive-
+  overlap bug — resolved by per-year staffing, joining projects on the anchor date and capacity-
+  aware allocations (I7); the validator's over-allocation measure itself was corrected (I8).
+- Assignment generation optimized from ~75 s to 9 s at full scale (I9).
+
+**Final run (seed 42, 100,000 employees):** 1,847,772 staging rows; **0 violations across 33 rule
+checks**; fidelity: YearsInCurrentRole 100 %, YearsSinceLastPromotion 100 %, YearsWithCurrManager
+98.1 %, last salary hike (±1 pt) 92.1 %; correlation matrix vs IBM within 0.009 (mean 0.002);
+department / role / level / attrition mix identical to IBM; attrition by overtime 30.1 % vs IBM
+30.5 %. Generated and validated in ~70 s, loaded into `hr_staging` in ~93 s (5,000-row batches,
+8,000–25,000 rows/s). Verified directly in MySQL: 1,847,772 rows, one batch; staging ≈ 236 MB.
+Report: [`docs/synthesis_report.md`](synthesis_report.md).
+
+**Tests:** `tests/test_synthesizer.py` (9 tests: rules, fidelity, population mix, correlations,
+uniqueness, planted-issue manifest, reproducibility, reference data mirrors the database,
+Singleton sharing one pool). Whole suite: **54 / 54 pass**.
+
+**D24 reviewed and approved.** Rationale accepted: it removes a visible realism defect (senior
+hires at 18), contradicts no IBM value (IBM fixes only the *last* promotion), mirrors the logic of
+D18, touches only 2.8 % of job versions, and gives the SCD Type 2 history believable career paths.
+Alternatives (dropping it, changing hire levels or ages directly) would either leave the defect
+or override source data.
+
 ## Step 11 — Design questions answered and documented
 
 Two questions raised during the star-schema review were answered and written into the design

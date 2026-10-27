@@ -27,6 +27,7 @@ SQL_DIR = ROOT / "sql"
 # Tables holding loaded business data. Reference/lookup tables are not listed:
 # rebuilding them is always safe because the scripts repopulate them.
 PROTECTED_TABLES = [
+    ("hr_staging", "stg_employees"),
     ("hr_oltp", "employees"),
     ("hr_oltp", "projects"),
     ("hr_dw", "dim_employee"),

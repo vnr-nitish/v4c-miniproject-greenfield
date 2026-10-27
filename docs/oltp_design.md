@@ -417,16 +417,18 @@ leaving is recorded with `exit_date`, not by deleting the row.
 
 ---
 
-## 13. Expected volumes (option A)
+## 13. Volumes (option A)
 
-| Table | Approx. rows |
-|---|---|
-| employees | 100,000 |
-| employee_job_history | ~300,000 |
-| employee_surveys | ~450,000 |
-| performance_reviews | ~450,000 |
-| projects | ~2,000 |
-| project_assignments | ~250,000 |
-| **OLTP total** | **~1.5 million** |
+| Table | Estimated at design time | Generated (seed 42, after de-duplication) |
+|---|---|---:|
+| employees | 100,000 | 100,000 |
+| employee_job_history | ~300,000 | 308,986 |
+| employee_surveys | ~450,000 | 468,646 |
+| performance_reviews | ~450,000 | 463,011 |
+| projects | ~2,000 | 2,000 |
+| project_assignments | ~250,000 | 503,240 |
+| **OLTP total** | **~1.5 million** | **≈ 1.85 million** |
 
-Estimates; exact figures will be measured after the first load and recorded here.
+Assignments came out at twice the estimate because staffing is generated per employment year
+(about one assignment per employee per year) so that 96 % of reviews have a project — see
+`synthesizer_design.md`, refinement I7. The OLTP load (Phase 2) will confirm the final counts.

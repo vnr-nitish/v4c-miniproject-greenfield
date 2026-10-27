@@ -473,8 +473,9 @@ blindly to every dimension was evaluated and rejected. Three options were compar
 |---|---|
 | dim_date | ~5,844 |
 | dim_department | 3 |
-| dim_project | ~2,000 + 1 special member |
-| dim_employee | ~300,000 |
-| fact_performance_reviews | ~477,000 |
+| dim_project | 2,000 + 1 special member |
+| dim_employee | ≈ 309,000 (one row per job version; 308,986 generated) |
+| fact_performance_reviews | ≈ 463,000 (one row per review; 463,011 generated after removing resubmissions) |
 
-Estimates from §4; exact figures will be recorded after the first load.
+Estimated in §4 (300K / 477K); the generated figures come from `synthesis_report.md` and will be
+confirmed by the ETL load.
