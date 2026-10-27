@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Virtual environment
+.venv/
+venv/
+
+# Secrets (never commit credentials)
+.env
+.streamlit/secrets.toml
+
+# Generated data (re-created by the synthesizer)
+data/synthesized/
+*.log
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
