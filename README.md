@@ -21,10 +21,12 @@ Python 3.11 (OOP, pandas, Faker) · MySQL 8 · Streamlit · Plotly · draw.io ·
 │   ├── dal/              # Data Access Layer managers (CRUD, analytics, ETL)
 │   └── synthesizer/      # Data synthesizer (pandas + Faker)
 ├── sql/                  # DDL, DML, stored procedures, CTEs, window functions
+├── scripts/              # setup_database.py — builds the schemas from sql/
+├── analysis/             # dataset profiling that drove the schema design
 ├── diagrams/             # Editable draw.io ER and dimensional-model diagrams
 ├── data/raw/             # IBM HR Analytics source dataset
-├── tests/                # pytest unit tests
-└── docs/                 # Project documentation
+├── tests/                # pytest tests (schema constraints, ...)
+└── docs/                 # Design documents and project journal
 ```
 
 ## Local setup
@@ -34,6 +36,25 @@ python -m venv .venv
 pip install -r requirements.txt
 copy .env.example .env            # then fill in your MySQL credentials
 ```
+
+## Database setup
+Builds `hr_staging`, `hr_oltp` (14 tables + reference data + views) and `hr_dw` (star schema)
+by running the numbered scripts in `sql/` in order:
+```bash
+python scripts/setup_database.py          # refuses to rebuild if business data is loaded
+python scripts/setup_database.py --force  # deliberate rebuild (drops and recreates tables)
+```
+The scripts can also be run one by one in MySQL Workbench, in numeric order.
+
+Verify that every integrity rule is enforced:
+```bash
+python -m pytest tests -q
+```
+
+## Design documentation
+- [`docs/oltp_design.md`](docs/oltp_design.md) — data dictionary, profiling findings, normalized OLTP design
+- [`docs/dw_design.md`](docs/dw_design.md) — star schema, SCD Type 2, surrogate keys
+- [`docs/project_journal.md`](docs/project_journal.md) — step-by-step record of how the project was built
 
 ## Dataset
 [IBM HR Analytics Employee Attrition & Performance](https://www.kaggle.com/datasets/pavansubhasht/ibm-hr-analytics-attrition-dataset) — 1,470 rows, 35 columns.

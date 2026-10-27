@@ -213,6 +213,67 @@ Full design: [`docs/dw_design.md`](dw_design.md).
   `date_sk` line. Fixed by swapping the positions of `dim_date` (now top) and `dim_department`
   (now middle), so the fact's lines fan out without crossing.
 - **Review round 2:** rendered correctly — no crossing lines. **Star schema diagram approved.**
+- Committed to `feature/database-design`; **PR #2** (database design: ER model, star schema, design
+  documentation) opened and merged into `main`.
+
+## Step 12 — Phase 2: DDL scripts (branch `feature/database-ddl`)
+
+**Plan approved first:** file list and run order, how each design rule becomes SQL, reference-data
+values, a rebuild safety guard, and automated constraint tests. Staging DDL was deliberately moved
+to the synthesizer branch, because staging tables mirror the synthesizer's output.
+
+**Question answered — where do the "1–5" values come from?** Job levels 1–5 and education 1–5 are
+the IBM dataset's own codes; the rating scale 1–4 is IBM's official PerformanceRating scale. A new
+measurement showed job level is **independent of rating** (correlation −0.021) but **strongly tied
+to income** (0.95). Recorded as finding **F12** and added to the profiling script.
+
+**Files delivered:**
+
+| File | Contents |
+|---|---|
+| `sql/00_create_schemas.sql` | `hr_staging`, `hr_oltp`, `hr_dw` (utf8mb4) |
+| `sql/01_oltp_ddl.sql` | 14 tables, 20 foreign keys (all RESTRICT), CHECK constraints, generated columns, indexes |
+| `sql/02_oltp_reference_data.sql` | the 8 lookup tables (52 rows), each value traceable to a finding |
+| `sql/03_oltp_views.sql` | `vw_employee_current`; `vw_employee_snapshot` rebuilds IBM-style columns with CTEs, `LAG()` and `ROW_NUMBER()` (lossless-decomposition proof) |
+| `sql/04_dw_ddl.sql` | 4 dimensions, fact table, 2 ETL metadata tables, 4 foreign keys |
+| `sql/05_dw_seed.sql` | special member `dim_project` (sk −1, id 0) |
+| `scripts/setup_database.py` | runs the scripts in order (handles `DELIMITER`), refuses to rebuild over loaded data unless `--force` |
+| `tests/conftest.py`, `tests/test_schema.py` | 45 automated tests, each in a rolled-back transaction |
+
+**Result:** all scripts build in about 1.3 s (65 statements). **45 / 45 tests pass**: structure
+(table counts, reference rows, every FK is RESTRICT, special member present), a full valid employee
+lifecycle, the snapshot view's reconstructed tenure / promotion / manager / salary-hike values, and
+negative tests proving MySQL rejects invalid data (invalid department–role pair, two current
+versions, hire under 18, exit without reason, out-of-range scores, self-review, own manager,
+duplicate reviews, deleting a department in use, and the warehouse equivalents).
+
+**Refinements discovered while implementing** (design documents and diagrams updated to match):
+
+| # | Finding | Change |
+|---|---|---|
+| R1 | `survey_year` was derivable from `survey_date` — a redundant column | now a generated column `YEAR(survey_date)` |
+| R2 | `review_year` (the year reviewed) and `review_date` (when the review is held, often the next January) are genuinely different | both kept; CHECK keeps the date within the year or the following one |
+| R3 | `YEAR_MONTH` is a reserved word in MySQL | `dim_date.year_month` renamed `year_month_label` |
+| R4 | MySQL error 3818: a CHECK cannot reference an AUTO_INCREMENT column, so the special-member rule could not be written on `project_sk` | rule enforced through the natural key: special row has `project_id = 0` (NOT NULL, UNIQUE); the fact load becomes `COALESCE(project_id, 0)` |
+| R5 | The warehouse could hold two current versions of an employee if an ETL run went wrong | `dim_employee.current_version_key` (generated + UNIQUE), the same guarantee as in OLTP |
+| R6 | Not every reviewed year has a survey (e.g. hired after the survey date) | fact survey measures are nullable (NULL measures are acceptable; NULL foreign keys are not) |
+
+Also added: code-format checks (`EMP000001`, `PRJ00001`); a project has an actual end date exactly
+when it is Completed or Cancelled; an employee's latest job version stays open after they leave, so
+every employee always has exactly one current version.
+
+Note: rolled-back test inserts still consume AUTO_INCREMENT values (InnoDB never reuses them); a
+rebuild before the data load resets the counters.
+
+**Verification in MySQL Workbench:** `hr_oltp` showed 14 tables and 2 views. `hr_staging` and
+`hr_dw` were stuck on "fetching…" — a Workbench cache issue after the schemas were dropped and
+recreated while it was open, fixed by refreshing the Navigator. Confirmed independently through
+`information_schema`: `hr_oltp` 14 tables + 2 views, 40 CHECK constraints, 20 foreign keys;
+`hr_dw` 7 tables, 15 CHECK constraints, 4 foreign keys; `hr_staging` empty by design (its tables
+arrive with the synthesizer).
+
+**Agreed for the end of the project:** both draw.io diagrams will be re-rendered once more from the
+final files and checked against the final schema.
 
 ## Step 11 — Design questions answered and documented
 

@@ -1,7 +1,7 @@
 """Profile the IBM HR Attrition dataset before designing the OLTP schema.
 
 Measures column domains, functional dependencies and business rules. Every finding
-(F1-F11) in docs/oltp_design.md is reproduced by this script.
+(F1-F12) in docs/oltp_design.md is reproduced by this script.
 
 Usage:
     python analysis/profile_dataset.py
@@ -74,6 +74,11 @@ def main() -> None:
 
     section("F11 JobRole x BusinessTravel (no dependency)")
     print(pd.crosstab(df.JobRole, df.BusinessTravel))
+
+    section("F12 JobLevel vs PerformanceRating (independent) and MonthlyIncome (dependent)")
+    print((pd.crosstab(df.JobLevel, df.PerformanceRating, normalize="index") * 100).round(1))
+    print("corr(JobLevel, PerformanceRating):", round(df.JobLevel.corr(df.PerformanceRating), 3))
+    print("corr(JobLevel, MonthlyIncome):    ", round(df.JobLevel.corr(df.MonthlyIncome), 3))
 
 
 if __name__ == "__main__":
