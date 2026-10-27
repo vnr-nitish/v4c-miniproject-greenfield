@@ -103,6 +103,7 @@ The schema was produced with the standard database-design lifecycle:
 | F9 | Every Single employee has StockOptionLevel 0. | Artifact of IBM's fictional data; noted and preserved by the synthesizer. |
 | F10 | Attrition is 30.5 % with OverTime vs 10.4 % without — the strongest single predictor. | Overtime is recorded **per year** to allow trend analysis. |
 | F11 | BusinessTravel shows no dependency on JobRole. | It is a property of the person's position (history), not of the role. |
+| F12 | JobLevel takes exactly the values 1–5 (543 / 534 / 218 / 106 / 69 employees). It is **independent of PerformanceRating** (correlation −0.021; 10–17 % of every level is rated 4) but **strongly tied to MonthlyIncome** (correlation 0.95). | `job_levels` keeps IBM's 1–5 codes and carries the salary bands; `performance_rating_levels` is a separate scale (IBM's 1–4) with no link to level. Hike guidelines for ratings 3 and 4 come from F4; those for ratings 1 (0–4 %) and 2 (5–10 %) are set below rating 3 because the data never uses them. |
 
 ---
 
@@ -243,7 +244,7 @@ Conventions: snake_case, plural table names, `<entity>_id` keys; constraint pref
 | Column | Type | Constraints / notes |
 |---|---|---|
 | employee_id | INT UNSIGNED | PK, AUTO_INCREMENT |
-| employee_code | CHAR(9) | UQ — business key, e.g. EMP000001 |
+| employee_code | CHAR(9) | UQ — business key, e.g. EMP000001; CHECK format `^EMP[0-9]{6}$` |
 | first_name, last_name | VARCHAR(50) | |
 | email | VARCHAR(120) | UQ |
 | phone | VARCHAR(20) | |
@@ -275,7 +276,7 @@ department, role, level, manager and pay, and the source of SCD Type 2.
 | business_travel | VARCHAR(20) | CHECK IN ('Non-Travel','Travel_Rarely','Travel_Frequently') |
 | change_reason | VARCHAR(20) | CHECK IN ('Hire','Promotion','Transfer','Role Change','Salary Revision','Manager Change') |
 | effective_start_date | DATE | UQ with employee_id |
-| effective_end_date | DATE NULL | **exclusive** (half-open period `[start, end)`): equals the next version's start date; NULL = current version; CHECK end > start |
+| effective_end_date | DATE NULL | **exclusive** (half-open period `[start, end)`): equals the next version's start date; NULL = current version; CHECK end > start. An employee's latest version stays open even after they leave — leaving is recorded in `employees.exit_date` — so every employee always has exactly one current version |
 | current_version_key | INT UNSIGNED NULL | GENERATED: employee_id when end date is NULL, else NULL; **UNIQUE** → at most one current version per employee |
 | created_at | DATETIME | audit |
 
@@ -284,8 +285,8 @@ department, role, level, manager and pay, and the source of SCD Type 2.
 |---|---|---|
 | survey_id | INT UNSIGNED | PK |
 | employee_id | INT UNSIGNED | FK → employees; UQ (employee_id, survey_year) |
-| survey_year | SMALLINT UNSIGNED | |
 | survey_date | DATE | |
+| survey_year | SMALLINT UNSIGNED | **GENERATED** as `YEAR(survey_date)` — derived, so never stored independently (avoids a redundant column) |
 | environment_satisfaction, job_satisfaction, relationship_satisfaction, job_involvement, work_life_balance | TINYINT | CHECK 1–4 each |
 | created_at | DATETIME | |
 
@@ -293,13 +294,13 @@ department, role, level, manager and pay, and the source of SCD Type 2.
 | Column | Type | Constraints / notes |
 |---|---|---|
 | project_id | SMALLINT UNSIGNED | PK |
-| project_code | CHAR(8) | UQ, e.g. PRJ00001 |
+| project_code | CHAR(8) | UQ, e.g. PRJ00001; CHECK format `^PRJ[0-9]{5}$` |
 | project_name | VARCHAR(120) | |
 | description | VARCHAR(500) NULL | |
 | department_id | TINYINT UNSIGNED | FK → departments (owning department) |
 | project_manager_id | INT UNSIGNED NULL | FK → employees |
 | start_date, planned_end_date | DATE | CHECK planned_end ≥ start |
-| actual_end_date | DATE NULL | planned vs actual → delay / bottleneck analysis |
+| actual_end_date | DATE NULL | planned vs actual → delay / bottleneck analysis; CHECK set **if and only if** status is Completed or Cancelled |
 | budget | DECIMAL(14,2) | CHECK > 0 |
 | status | VARCHAR(15) | CHECK IN ('Planned','Active','On Hold','Completed','Cancelled') |
 | priority | VARCHAR(10) | CHECK IN ('Low','Medium','High','Critical') |
@@ -322,8 +323,8 @@ department, role, level, manager and pay, and the source of SCD Type 2.
 |---|---|---|
 | review_id | INT UNSIGNED | PK |
 | employee_id | INT UNSIGNED | FK → employees; UQ (employee_id, review_year) |
-| review_year | SMALLINT UNSIGNED | |
-| review_date | DATE | |
+| review_year | SMALLINT UNSIGNED | the **performance year being reviewed**; CHECK 2000–2100 |
+| review_date | DATE | the date the review was **held** — usually early in the following year, so it is *not* derivable from review_year; CHECK `YEAR(review_date)` is review_year or review_year + 1 |
 | reviewer_id | INT UNSIGNED | FK → employees; CHECK reviewer_id ≠ employee_id |
 | project_id | SMALLINT UNSIGNED NULL | FK → projects (primary project that year) |
 | rating_id | TINYINT UNSIGNED | FK → performance_rating_levels |
