@@ -46,14 +46,25 @@ python scripts/setup_database.py --force  # deliberate rebuild (drops and recrea
 ```
 The scripts can also be run one by one in MySQL Workbench, in numeric order.
 
-Verify that every integrity rule is enforced:
+## Generate the synthetic dataset
+Scales the 1,470-row IBM dataset to 100,000 employees with history, surveys, reviews, projects and
+assignments (~1.85 million rows), validates it and loads it into `hr_staging`:
 ```bash
-python -m pytest tests -q
+python -m src.synthesizer.run                          # full build + load (~3 minutes)
+python -m src.synthesizer.run --employees 5000 --no-load   # quick build, no database needed
+```
+The run writes [`docs/synthesis_report.md`](docs/synthesis_report.md) (rule checks, fidelity,
+realism comparison, timings) and CSV copies in `data/synthesized/`.
+
+## Tests
+```bash
+python -m pytest -q        # schema constraints + synthesizer rules
 ```
 
 ## Design documentation
 - [`docs/oltp_design.md`](docs/oltp_design.md) — data dictionary, profiling findings, normalized OLTP design
 - [`docs/dw_design.md`](docs/dw_design.md) — star schema, SCD Type 2, surrogate keys
+- [`docs/synthesizer_design.md`](docs/synthesizer_design.md) — how 1,470 rows become 100,000 realistic employees
 - [`docs/project_journal.md`](docs/project_journal.md) — step-by-step record of how the project was built
 
 ## Dataset
