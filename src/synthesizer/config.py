@@ -31,6 +31,14 @@ class SynthesizerConfig:
     # job history (section 5)
     transfer_share: float = 0.10
 
+    # yearly history of reviews and surveys (section 6, D26): the chance per year, going back in
+    # time, that a value moves to a neighbouring value (60 % of outstanding ratings stay outstanding,
+    # 80 % of overtime stays overtime)
+    rating_change: float = 0.40
+    overtime_change: float = 0.20
+    training_change: float = 0.30
+    survey_change: float = 0.30
+
     # projects and assignments (section 6)
     n_projects: int = 2_000
     project_start_from: date = date(2018, 1, 1)

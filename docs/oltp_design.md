@@ -430,7 +430,7 @@ leaving is recorded with `exit_date`, not by deleting the row.
 | employees | 100,000 | 100,000 |
 | employee_job_history | ~300,000 | 308,986 |
 | employee_surveys | ~450,000 | 468,646 |
-| performance_reviews | ~450,000 | 463,011 |
+| performance_reviews | ~450,000 | 463,015 |
 | projects | ~2,000 | 2,000 |
 | project_assignments | ~250,000 | 503,240 |
 | **OLTP total** | **~1.5 million** | **≈ 1.85 million** |

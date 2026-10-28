@@ -1,7 +1,9 @@
 """SurveyGenerator and ReviewGenerator — yearly engagement surveys and performance reviews.
 
 The LATEST survey / review of each employee carries the IBM values exactly. Earlier years are
-generated backwards with persistence, so personal trends look natural (synthesizer_design.md §6).
+generated backwards so that every year has the same distribution as the IBM snapshot of the
+employees who stayed, while each person's values persist from year to year
+(synthesizer_design.md §6, D26). KPI scores follow a truncated normal distribution per rating (D27).
 """
 from __future__ import annotations
 
@@ -12,7 +14,9 @@ from src.synthesizer.base import BaseGenerator
 
 SURVEY_COLUMNS = ["environment_satisfaction", "job_satisfaction", "relationship_satisfaction",
                   "job_involvement", "work_life_balance"]
-EARLIER_RATING_P = {1: 0.02, 2: 0.08, 3: 0.72, 4: 0.18}
+# rating -> (mean, standard deviation, lowest, highest) of the KPI score
+KPI_BANDS = {4: (92.0, 4.0, 85.0, 100.0), 3: (78.0, 7.0, 60.0, 95.0), 2: (60.0, 7.0, 40.0, 75.0),
+             1: (42.0, 7.0, 20.0, 60.0)}
 COMMENTS = {
     1: ["Performance below expectations; improvement plan agreed.", "Several objectives missed this year."],
     2: ["Met some objectives; development needed in key areas.", "Solid effort, inconsistent delivery."],
@@ -23,7 +27,7 @@ COMMENTS = {
 
 
 class _YearlyGenerator(BaseGenerator):
-    """Shared logic: employee x cycle-year eligibility and backward random walks."""
+    """Shared logic: employee x cycle-year eligibility and backward walks through the years."""
 
     def _employee_years(self, emp: pd.DataFrame) -> pd.DataFrame:
         years = np.array(self.config.cycle_years)
@@ -36,18 +40,41 @@ class _YearlyGenerator(BaseGenerator):
         grid["leaver"] = (emp.attrition == "Yes").to_numpy()[grid.emp_idx]
         return grid
 
-    def _walk_back(self, frame: pd.DataFrame, latest: np.ndarray, low: int, high: int,
-                   p_active: tuple, p_leaver: tuple) -> np.ndarray:
-        """Value per row: the latest row keeps `latest`; going back in time each year moves -1/0/+1.
-        For leavers +1 is more likely, i.e. scores were higher before they declined towards exit."""
-        n = len(frame)
-        leaver = frame.leaver.to_numpy()
-        steps_a = self._rng.choice([-1, 0, 1], size=n, p=p_active)
-        steps_l = self._rng.choice([-1, 0, 1], size=n, p=p_leaver)
-        steps = np.where(leaver, steps_l, steps_a)
-        steps[frame["rank_back"].to_numpy() == 0] = 0
-        cum = pd.Series(steps).groupby(frame.emp_idx.to_numpy()).cumsum().to_numpy()
-        return np.clip(latest + cum, low, high)
+    @staticmethod
+    def _stayers_distribution(emp: pd.DataFrame, column: str) -> pd.Series:
+        """The IBM distribution of a column among the employees who did not leave."""
+        return emp.loc[emp.attrition == "No", column].value_counts(normalize=True).sort_index()
+
+    def _walk_back(self, frame: pd.DataFrame, latest: np.ndarray, target: pd.Series, change: float) -> np.ndarray:
+        """Value per row: the latest row keeps `latest`; going back one year at a time, the value
+        moves to a neighbouring value with probability `change`, accepted with the
+        Metropolis-Hastings probability. The walk's stationary distribution is `target` (the
+        stayers' IBM distribution), so for people who stayed every earlier year has that
+        distribution — no year differs from the snapshot — while a leaver's values drift back
+        towards it: their decline happens close to the exit.
+
+        `frame` is ordered by employee and then backwards in time (see _rank_back), so the row
+        before a row with rank_back = k is the same employee's year k - 1.
+        """
+        states = np.union1d(target.index.to_numpy(), np.unique(latest))
+        pi = target.reindex(states, fill_value=0.0).to_numpy()
+        last = len(states) - 1
+        neighbours = np.where((np.arange(len(states)) == 0) | (np.arange(len(states)) == last), 1, 2)
+        if last == 0:
+            return np.full(len(frame), states[0])
+        values = np.searchsorted(states, latest)
+        rank_back = frame["rank_back"].to_numpy()
+        for k in range(1, int(rank_back.max(initial=0)) + 1):
+            rows = np.flatnonzero(rank_back == k)
+            i = values[rows - 1]
+            up = self._rng.random(len(rows)) < 0.5
+            j = np.where(i == 0, 1, np.where(i == last, last - 1, np.where(up, i + 1, i - 1)))
+            # Metropolis-Hastings: accept with (pi_j / q(i->j)) / (pi_i / q(j->i)), q = 1 / neighbours
+            with np.errstate(divide="ignore", invalid="ignore"):
+                ratio = np.where(pi[i] > 0, (pi[j] * neighbours[i]) / (pi[i] * neighbours[j]), 1.0)
+            moves = (self._rng.random(len(rows)) < change) & (self._rng.random(len(rows)) < ratio)
+            values[rows] = np.where(moves, j, i)
+        return states[values]
 
     @staticmethod
     def _rank_back(frame: pd.DataFrame) -> pd.DataFrame:
@@ -69,7 +96,8 @@ class SurveyGenerator(_YearlyGenerator):
         s = self._rank_back(grid[employed.to_numpy()].copy())
         for col in SURVEY_COLUMNS:
             latest = emp[col].to_numpy()[s.emp_idx]
-            s[col] = self._walk_back(s, latest, 1, 4, (0.15, 0.70, 0.15), (0.10, 0.65, 0.25)).astype(int)
+            s[col] = self._walk_back(s, latest, self._stayers_distribution(emp, col),
+                                     self.config.survey_change).astype(int)
         s["employee_code"] = emp.employee_code.to_numpy()[s.emp_idx]
         return s.sort_values(["emp_idx", "year"], ignore_index=True)
 
@@ -77,7 +105,8 @@ class SurveyGenerator(_YearlyGenerator):
 class ReviewGenerator(_YearlyGenerator):
 
     def generate(self, emp: pd.DataFrame, history: pd.DataFrame, department_heads: dict) -> pd.DataFrame:
-        snapshot = np.datetime64(self.config.snapshot_date, "D")
+        cfg = self.config
+        snapshot = np.datetime64(cfg.snapshot_date, "D")
         grid = self._employee_years(emp)
         next_year = (grid.year + 1).astype(str)
         grid["review_date"] = self.random_dates((next_year + "-01-15").to_numpy().astype("datetime64[D]"),
@@ -87,27 +116,21 @@ class ReviewGenerator(_YearlyGenerator):
             grid.exit_date.isna() | (grid.exit_date > grid.review_date)) & (grid.review_date <= snapshot)
         r = self._rank_back(grid[eligible.to_numpy()].copy())
         n = len(r)
-        latest = r.rank_back.to_numpy() == 0
 
-        # rating: latest = IBM; earlier years keep it 60 % of the time, else the earlier-years mix
-        ibm_rating = emp.performance_rating.to_numpy()[r.emp_idx]
-        drawn = self._rng.choice(list(EARLIER_RATING_P), size=n, p=list(EARLIER_RATING_P.values()))
-        keep = self._rng.random(n) < 0.60
-        r["rating"] = np.where(latest | keep, ibm_rating, drawn)
+        # rating, overtime, training: latest = IBM; earlier years walk back towards the stayers' mix
+        r["rating"] = self._walk_back(r, emp.performance_rating.to_numpy()[r.emp_idx],
+                                      self._stayers_distribution(emp, "performance_rating"),
+                                      cfg.rating_change).astype(int)
+        r["overtime"] = self._walk_back(r, (emp.over_time == "Yes").to_numpy()[r.emp_idx],
+                                        self._stayers_distribution(emp.assign(ot=emp.over_time == "Yes"), "ot"),
+                                        cfg.overtime_change).astype(bool)
+        r["training_sessions"] = self._walk_back(r, emp.training_times_last_year.to_numpy()[r.emp_idx],
+                                                 self._stayers_distribution(emp, "training_times_last_year"),
+                                                 cfg.training_change).astype(int)
 
         # KPI score: correlated with the rating, not determined by it
-        mean = np.select([r.rating == 4, r.rating == 3, r.rating == 2], [92.0, 78.0, 60.0], 42.0)
-        sd = np.where(r.rating == 4, 4.0, 7.0)
-        lo = np.select([r.rating == 4, r.rating == 3, r.rating == 2], [85, 60, 40], 20)
-        hi = np.select([r.rating == 4, r.rating == 3, r.rating == 2], [100, 95, 75], 60)
-        r["kpi_score"] = np.round(np.clip(self._rng.normal(mean, sd), lo, hi), 2)
-
-        ibm_training = emp.training_times_last_year.to_numpy()[r.emp_idx]
-        r["training_sessions"] = np.where(latest, ibm_training,
-                                          np.clip(ibm_training + self._rng.integers(-1, 2, n), 0, 6))
-        ibm_ot = (emp.over_time == "Yes").to_numpy()[r.emp_idx]
-        flip = self._rng.random(n) < 0.20
-        r["overtime"] = np.where(latest, ibm_ot, np.where(flip, ~ibm_ot, ibm_ot))
+        bands = np.array([KPI_BANDS[int(rating)] for rating in r.rating])
+        r["kpi_score"] = np.round(self._truncated_normal(*bands.T), 2)
 
         pick = self._rng.integers(0, 10, n)
         has_comment = self._rng.random(n) < 0.35
@@ -117,6 +140,16 @@ class ReviewGenerator(_YearlyGenerator):
         r["employee_code"] = emp.employee_code.to_numpy()[r.emp_idx]
         r["reviewer_code"] = self._reviewers(emp, history, r, department_heads)
         return r.sort_values(["emp_idx", "year"], ignore_index=True)
+
+    def _truncated_normal(self, mean: np.ndarray, sd: np.ndarray, low: np.ndarray, high: np.ndarray) -> np.ndarray:
+        """Normal values redrawn until they fall inside [low, high] — unlike clipping, no value
+        piles up at the limits (D27)."""
+        values = self._rng.normal(mean, sd)
+        outside = (values < low) | (values > high)
+        while outside.any():
+            values[outside] = self._rng.normal(mean[outside], sd[outside])
+            outside = (values < low) | (values > high)
+        return values
 
     @staticmethod
     def _reviewers(emp: pd.DataFrame, history: pd.DataFrame, r: pd.DataFrame, heads: dict) -> np.ndarray:
