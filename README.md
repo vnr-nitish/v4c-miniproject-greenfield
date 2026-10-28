@@ -16,16 +16,17 @@ Python 3.11 (OOP, pandas, Faker) · MySQL 8 · Streamlit · Plotly · draw.io ·
 ├── app.py                # Streamlit entry point
 ├── pages/                # Streamlit pages (data entry + dashboards)
 ├── src/
-│   ├── db_manager.py     # Singleton DatabaseConnection
-│   ├── models/           # Entity classes: Employee, Project, Review
-│   ├── dal/              # Data Access Layer managers (CRUD, analytics, ETL)
+│   ├── db_manager.py     # Singleton DatabaseConnection (shared pool, transactions, error translation)
+│   ├── exceptions.py     # application exceptions (validation, business rules, not found, …)
+│   ├── models/           # Entity classes: Employee, Position, Project, Assignment, Review
+│   ├── dal/              # Data Access Layer managers (employees, projects, reviews, analytics, ETL, schema)
 │   └── synthesizer/      # Data synthesizer (pandas + Faker)
 ├── sql/                  # DDL, DML, stored procedures, CTEs, window functions, validation queries
-├── scripts/              # setup_database.py (builds the schemas), run_etl.py (runs the ETL)
+├── scripts/              # command-line front ends: setup_database.py (SchemaManager), run_etl.py (EtlManager)
 ├── analysis/             # dataset profiling that drove the schema design
 ├── diagrams/             # Editable draw.io ER and dimensional-model diagrams
 ├── data/raw/             # IBM HR Analytics source dataset
-├── tests/                # pytest tests (schema constraints, synthesizer, ETL)
+├── tests/                # pytest tests (schema, synthesizer, ETL, entities, managers)
 └── docs/                 # Design documents and project journal
 ```
 
@@ -69,17 +70,32 @@ python scripts/run_etl.py --migrate --full-reload  # rebuild OLTP and warehouse 
 [`sql/validation_queries.sql`](sql/validation_queries.sql) shows in MySQL Workbench that it worked
 (reconciliation, SCD Type 2 history, a rolled-back department change).
 
+## Python backend
+Validated entity classes and one manager per area, all sharing a Singleton connection pool:
+```python
+from src.dal import AnalyticsFilter, AnalyticsManager, EmployeeManager
+
+change = EmployeeManager().change_position(employee_id, new_position)   # department change = SCD Type 2
+change.expired_version, change.new_version                              # the warehouse rows before / after
+
+AnalyticsManager().top_performers(AnalyticsFilter(fiscal_years=("FY2025-26",)), top_n=5)   # DENSE_RANK()
+```
+Design, OOP principles and decisions: [`docs/backend_design.md`](docs/backend_design.md).
+
 ## Tests
 ```bash
-python -m pytest -q        # schema constraints + synthesizer rules + ETL reconciliation
+python -m pytest -q                        # everything (needs MySQL with the ETL loaded)
+python -m pytest tests/test_models.py -q   # entity rules only — no database needed
 ```
-82 tests, about 3 minutes. The ETL tests need a completed ETL run; they skip themselves otherwise.
+211 tests, about 5 minutes. Database tests run inside rolled-back transactions — they use the real
+data and never change it; they skip themselves when MySQL or the loaded data is missing.
 
 ## Design documentation
 - [`docs/oltp_design.md`](docs/oltp_design.md) — data dictionary, profiling findings, normalized OLTP design (§14: why more than five tables)
 - [`docs/dw_design.md`](docs/dw_design.md) — star schema, SCD Type 2, surrogate keys
 - [`docs/synthesizer_design.md`](docs/synthesizer_design.md) — how 1,470 rows become 100,000 realistic employees
 - [`docs/etl_design.md`](docs/etl_design.md) — stored-procedure ETL, cleaning rules, SCD Type 2 algorithm, logging
+- [`docs/backend_design.md`](docs/backend_design.md) — OOP backend: entities, Singleton, managers, error handling, analytics, attrition-risk score
 - [`docs/project_journal.md`](docs/project_journal.md) — step-by-step record of how the project was built
 
 ## Dataset
