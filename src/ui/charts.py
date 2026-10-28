@@ -53,8 +53,8 @@ def lines(frame: pd.DataFrame, x: str, y: str, color: str | None = None, title: 
 
 def bars(frame: pd.DataFrame, x: str, y: str, color: str | None = None, horizontal: bool = False,
          title: str = "", colors: dict | None = None, text: str | None = None) -> go.Figure:
-    kwargs = dict(x=frame[y], y=frame[x], orientation="h") if horizontal else dict(x=frame[x], y=frame[y])
-    fig = px.bar(frame, **kwargs, color=frame[color] if color else None, text=frame[text] if text else None,
+    kwargs = dict(x=y, y=x, orientation="h") if horizontal else dict(x=x, y=y)
+    fig = px.bar(frame, **kwargs, color=color, text=text,
                  color_discrete_map=colors or theme.DEPARTMENT_COLORS,
                  color_discrete_sequence=theme.PALETTE)
     fig.update_traces(marker=dict(cornerradius=6), textposition="outside" if text else None)
