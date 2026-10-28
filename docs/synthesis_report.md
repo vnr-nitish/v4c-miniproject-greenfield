@@ -1,6 +1,6 @@
 # Synthesis Report
 
-Generated 2026-10-27 23:55 by `python -m src.synthesizer.run` — 100,000 employees, seed 42, snapshot 2026-06-30.
+Generated 2026-10-28 14:49 by `python -m src.synthesizer.run` — 100,000 employees, seed 42, snapshot 2026-06-30.
 Design and decisions: [`synthesizer_design.md`](synthesizer_design.md).
 
 ## 1. Volume
@@ -10,26 +10,26 @@ Design and decisions: [`synthesizer_design.md`](synthesizer_design.md).
 | `stg_employees` | 100,500 |
 | `stg_job_history` | 308,986 |
 | `stg_surveys` | 468,646 |
-| `stg_reviews` | 464,400 |
+| `stg_reviews` | 464,404 |
 | `stg_projects` | 2,000 |
 | `stg_assignments` | 503,240 |
-| **Total** | **1,847,772** |
+| **Total** | **1,847,776** |
 
 ## 2. Performance
 
 | Step | Seconds |
 |---|---:|
 | load + validate IBM source | 0.0 |
-| employees | 1.4 |
-| job history + org chart | 37.9 |
-| projects | 3.5 |
-| assignments | 9.4 |
-| surveys | 1.1 |
-| reviews | 2.7 |
-| validate | 3.6 |
-| write CSV files | 7.7 |
-| load hr_staging | 92.7 |
-| total | 163.1 |
+| employees | 0.6 |
+| job history + org chart | 11.2 |
+| projects | 1.4 |
+| assignments | 3.9 |
+| surveys | 0.6 |
+| reviews | 1.4 |
+| validate | 1.5 |
+| write CSV files | 4.1 |
+| load hr_staging | 71.9 |
+| total | 98.3 |
 
 ## 3. Rule checks (every business rule — violations must be 0)
 
@@ -57,18 +57,27 @@ Design and decisions: [`synthesizer_design.md`](synthesizer_design.md).
 | reviews | reviewed only while employed | 0 |
 | reviews | has a reviewer who is not the employee | 0 |
 | reviews | latest review carries the IBM rating | 0 |
+| reviews | earlier reviews use only the ratings IBM uses | 0 |
+| reviews | each year's share of outstanding ratings within 3 points of the snapshot | 0 |
+| reviews | each year's overtime share within 5 points of the snapshot | 0 |
+| reviews | KPI scores do not pile up at a band limit (at most 0.1 % of reviews) | 0 |
 | surveys | surveyed only while employed | 0 |
 | surveys | latest survey carries the IBM environment_satisfaction | 0 |
+| surveys | each year's mean environment_satisfaction within 0.10 of the snapshot | 0 |
 | surveys | latest survey carries the IBM job_satisfaction | 0 |
+| surveys | each year's mean job_satisfaction within 0.10 of the snapshot | 0 |
 | surveys | latest survey carries the IBM relationship_satisfaction | 0 |
+| surveys | each year's mean relationship_satisfaction within 0.10 of the snapshot | 0 |
 | surveys | latest survey carries the IBM job_involvement | 0 |
+| surveys | each year's mean job_involvement within 0.10 of the snapshot | 0 |
 | surveys | latest survey carries the IBM work_life_balance | 0 |
+| surveys | each year's mean work_life_balance within 0.10 of the snapshot | 0 |
 | projects | actual end date exactly when Completed/Cancelled | 0 |
 | projects | actual end not before start | 0 |
 | assignments | assignment starts after hire | 0 |
 | assignments | assignment ends by the exit date | 0 |
 | assignments | allocation between 1 and 100 | 0 |
-| **All** | **33 rules** | **0** |
+| **All** | **42 rules** | **0** |
 
 ## 4. Fidelity — IBM tenure values reconstructed from the generated history
 
@@ -202,8 +211,13 @@ PercentSalaryHike counts a match within ±1 percentage point (salaries are whole
 | all versions with a manager | 96.13 % |
 | manager segments left unassigned (too early in company history) | 3877 |
 | department heads | {'Human Resources': 'EMP000782', 'Research & Development': 'EMP000213', 'Sales': 'EMP000218'} |
-| reviews per cycle year | {2019: 46489, 2020: 52308, 2021: 62005, 2022: 67120, 2023: 73042, 2024: 78874, 2025: 83173} |
-| rating distribution (all reviews) | {1: 0.6, 2: 2.6, 3: 80.3, 4: 16.4} |
+| reviews per cycle year | {2019: 46479, 2020: 52298, 2021: 61998, 2022: 67128, 2023: 73052, 2024: 78872, 2025: 83188} |
+| rating distribution (all reviews) | {3: 84.7, 4: 15.3} |
+| outstanding ratings per cycle year (%) | {2019: 15.1, 2020: 15.3, 2021: 15.2, 2022: 15.3, 2023: 15.3, 2024: 15.1, 2025: 15.5} |
+| overtime per cycle year (%) | {2019: 26.7, 2020: 26.5, 2021: 26.2, 2022: 25.9, 2023: 25.5, 2024: 24.8, 2025: 24.1} |
+| mean KPI score per cycle year | {2019: 80.09, 2020: 80.1, 2021: 80.07, 2022: 80.11, 2023: 80.14, 2024: 80.09, 2025: 80.12} |
+| mean job satisfaction per survey year | {2019: 2.72, 2020: 2.73, 2021: 2.75, 2022: 2.74, 2023: 2.74, 2024: 2.76, 2025: 2.77} |
+| KPI scores exactly at a band limit (D27) | 0.00 % |
 | surveys per year | {2019: 47275, 2020: 53067, 2021: 62787, 2022: 67958, 2023: 73935, 2024: 79667, 2025: 83957} |
 | projects by status | {'Completed': 1563, 'Active': 252, 'Cancelled': 105, 'Planned': 53, 'On Hold': 27} |
 | completed projects finishing late | 38.5 % |
@@ -217,8 +231,8 @@ These are deliberately present in staging; the staging → OLTP ETL must fix eve
 
 | Issue | Count |
 |---|---|
-| gender_codes | 979 |
-| label_noise_employees | {'upper_case': 464, 'lower_case': 496, 'extra_spaces': 527, 'department_alias': 480} |
-| label_noise_job_history | {'upper_case': 1614, 'lower_case': 1553, 'extra_spaces': 1588, 'department_alias': 1534} |
+| gender_codes | 1027 |
+| label_noise_employees | {'upper_case': 476, 'lower_case': 536, 'extra_spaces': 515, 'department_alias': 484} |
+| label_noise_job_history | {'upper_case': 1473, 'lower_case': 1571, 'extra_spaces': 1568, 'department_alias': 1560} |
 | duplicate_employee_rows | 500 |
 | duplicate_review_rows | 1389 |

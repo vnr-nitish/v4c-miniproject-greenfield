@@ -173,6 +173,54 @@ hire date are never changed. Previous roles at role changes are also chosen with
 IBM since hire, or careers too short to fit another promotion). **No IBM tenure value changes**
 (YearsSinceLastPromotion stays 100 % reproducible). 8,671 such promotions were added.
 
+### D26 — Review and survey history follows the snapshot's distribution (fix, branch `fix/review-history`)
+
+**The problem (found while building the Phase 3 analytics):** the year-over-year view showed a jump
+in the latest cycle that no real company would have — low ratings fell from about 4 % to 0 %,
+overtime from 35 % to 24 % and the average rating rose by 0.039 in a single year. The cause was the
+first history design: earlier years drew ratings from the full 1–4 scale while the latest review is
+IBM's, and IBM only uses ratings 3 and 4; earlier overtime flipped the IBM value 20 % of the time in
+either direction, which pulls every earlier year towards 50 % (0.8 × 28 % + 0.2 × 72 % ≈ 37 %);
+survey scores took symmetric ±1 steps clipped at 1 and 4, which drift towards the middle of the
+scale.
+
+**Decision:** the latest review and survey still carry the IBM values exactly. Going back one year
+at a time, each value (rating, overtime, training sessions, the five survey scores) moves to a
+neighbouring value with a small probability, accepted with the Metropolis–Hastings rule, so that
+the walk's long-run distribution is **the IBM distribution of the employees who stayed**:
+- for people who stayed, every earlier year has the snapshot's distribution — no year can differ
+  from the latest one by construction;
+- a leaver's values (more overtime, lower satisfaction) drift back towards that distribution, so
+  their decline happens in the years before the exit. This replaces the old explicit upward drift
+  for leavers with the same effect, derived from the data;
+- persistence is kept: an outstanding rating stays outstanding 60 % of the time, overtime stays
+  overtime 80 % of the time (`SynthesizerConfig.rating_change` etc.).
+
+Consequence: the generated history uses only ratings 3 and 4, like IBM. Ratings 1 and 2 remain on
+the scale and can be entered in the application.
+
+**Result (100,000 employees):** per review cycle 2019–2025 the outstanding share is 15.1–15.5 % and the
+average KPI 80.07–80.14; overtime declines smoothly from 26.7 % to 24.1 % (earlier cycles contain
+more people who later left, who worked more overtime). Employees, job history, projects and
+assignments are unchanged — they are generated before reviews; a fingerprint of all OLTP and
+warehouse tables before and after showed 16 of 19 tables identical, the other three being reviews,
+surveys and the review fact. Review dates are drawn afresh, so 4 more reviews of people leaving
+during review season exist (463,015).
+
+### D27 — KPI scores from a truncated normal distribution (fix, same branch)
+
+**The problem:** KPI scores were drawn from a normal distribution per rating and *clipped* to the
+rating's band, so every value beyond a limit landed exactly on it: 1,810 outstanding reviews scored
+exactly 100.00 and 3,017 exactly 85.00. In the dashboard this made dozens of people share rank 1
+in every department (up to 222).
+
+**Decision:** values outside the band are drawn again (a truncated normal distribution): same
+means, spreads and bands as before, but no pile-up at the limits.
+
+**Result:** 9 reviews at exactly 100.00 and 6 at 85.00; rank 1 per department and cycle is shared
+by 1–3 people. Validator checks added for D26 and D27 (each year's mix against the snapshot; KPI
+scores at a band limit at most 0.1 %) — the old data would have failed them.
+
 ---
 
 ## 4b. Refinements made while implementing
@@ -222,12 +270,15 @@ reference date (snapshot, or exit date for leavers):
 
 - The **latest** survey and review of each employee carry the IBM values exactly (satisfaction
   scores, PerformanceRating, OverTime, TrainingTimesLastYear).
-- **Earlier years** are generated backwards with persistence: each score stays the same or moves
-  ±1; for leavers, earlier scores drift slightly upward (satisfaction declines towards exit).
-- **Ratings:** earlier years keep the latest rating 60 % of the time, otherwise draw from
-  {1: 2 %, 2: 8 %, 3: 72 %, 4: 18 %} — the full IBM 1–4 scale.
-- **KPI score** is correlated with, but not determined by, the rating (rating 4 → 85–100,
-  3 → around 78, 2 → around 60, 1 → around 42).
+- **Earlier years** are generated backwards with persistence: each value stays the same or moves
+  to a neighbouring value, in a way that keeps the IBM distribution of the employees who stayed in
+  every year; leavers' values drift back towards it, so their decline (more overtime, lower
+  satisfaction) happens close to the exit (D26).
+- **Ratings** therefore use IBM's values 3 and 4 in every year; an outstanding rating stays
+  outstanding 60 % of the time, overtime stays overtime 80 % of the time.
+- **KPI score** is correlated with, but not determined by, the rating: a truncated normal
+  distribution per rating (rating 4 → around 92 within 85–100, 3 → around 78 within 60–95,
+  2 → around 60, 1 → around 42), with no pile-up at the limits (D27).
 - **Projects:** ~2,000, split across departments by headcount; Faker names; ~40 % of finished
   projects finish late by 1–120 days (delay analysis); managers are level-3+ staff of the owning
   department.
@@ -318,6 +369,27 @@ consistent with the source and makes careers realistic.
 In the company's early years (1980s–90s) there were too few senior colleagues employed for the
 whole period. Rather than invent an invalid manager, those periods have none — 1.1 % of current
 job versions, 0.6 % of versions since 2019. Their reviews go to the department head.
+
+**Q: Why are there no ratings of 1 or 2 in the generated reviews?**
+Because IBM gives none — PerformanceRating is 3 or 4 for all 1,470 employees. An earlier version
+generated low ratings in past years; then the latest cycle (IBM's values) looked like a sudden
+company-wide improvement that never happened. Every year now follows the snapshot (D26). The scale
+still has 1 and 2, and the application can record them.
+
+**Q: Why does overtime decline slightly from 2019 to 2025?**
+Earlier cycles contain more of the people who later left, and leavers worked more overtime (52.5 %
+in the IBM data against 23.9 % for those who stayed). The decline is smooth (26.7 % → 24.1 %); the
+year-to-year values of people who stayed do not change.
+
+**Q: Why a truncated normal distribution for KPI scores?**
+Clipping a normal distribution puts every value beyond a limit exactly on the limit — 1,810
+outstanding reviews scored exactly 100.00, which made dozens of people tie for first place.
+Drawing again keeps the same mean and range without that artifact (D27).
+
+**Q: Did the fix change any other data?**
+No. Employees, job history, projects and assignments are generated before reviews and were
+verified identical with table fingerprints; so were the warehouse dimensions, including every
+SCD Type 2 version and surrogate key. Only reviews, surveys and the review fact changed.
 
 **Q: Why does headcount grow from 2019 to 2025?**
 IBM's median tenure is 5 years, so most of today's employees joined recently; working backwards,
