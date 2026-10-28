@@ -580,3 +580,32 @@ Side effects, documented:
 **Result per cycle 2019–2025:** outstanding 15.1–15.5 %, average KPI 80.07–80.14, overtime 26.7 % →
 24.1 % (smooth: earlier cycles hold more people who later left), no low ratings; rank 1 per
 department shared by 1–3 people. No schema change, so both diagrams are unaffected.
+
+## Step 21 — Phase 3 completed: requirements re-check, suggestions, recalibration
+
+**Requirements re-checked** against the Phase 3 text (backend_design.md §1). Everything was in
+place. Two gaps were found against "manage MySQL connections safely" and "moving away from
+functional programming"; three suggestions were proposed and **approved**:
+
+| ID | Change |
+|---|---|
+| S1 / B18 | When all pool connections are busy, a request waits up to `DB_POOL_WAIT` s (default 10) instead of failing at once (the driver already reconnects stale connections — checked in its source) |
+| S2 / B19 | `run_with_retry()`: a new employee or project code taken by a simultaneous insert is retried with the next code; `translate_error` now keeps the constraint name, so only that case is retried |
+| S3 / B20 | `scripts/setup_database.py` → `SchemaManager(DatabaseConnection)` + `SqlScript`, so nothing connects outside the Singleton; the script is a thin front end. The new splitter produces exactly the old 112 statements; the guard was tested with execution stubbed out, then `--only 03 07 08` ran for real |
+
+**Recalibrated on the corrected data** (B21):
+- The fix from step 20 was merged into this branch, and every factor was measured again.
+- Overtime became a stronger signal (6.4 % vs 2.0 % left within a year).
+- Work-life balance 1 and job involvement 1, which zig-zagged before, became clean signals
+  (6.8 % and 7.4 %). Both were added.
+- The performance rating now shows no signal (3.2 % vs 3.0 %), so it stays out.
+- With the band thresholds unchanged, the Very high band's one-year attrition rose from
+  16.0 % to 19.6 % (6.2× the average), and the top two bands now hold 63 % of leavers.
+- The entity rules were checked again against all 1,377,241 rows: 0 rejected.
+
+**Verified:**
+- Whole suite **211 / 211 pass**: 82 Phase 1–2 tests, 72 entity tests, 51 manager tests and
+  6 schema-manager tests.
+- New tests: a busy pool waits and then fails clearly; a taken code is retried while other
+  duplicates are not; the guard stops a rebuild before anything runs.
+- Fingerprints of all 19 tables were taken before and after the suite: identical.

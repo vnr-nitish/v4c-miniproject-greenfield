@@ -19,10 +19,10 @@ Python 3.11 (OOP, pandas, Faker) · MySQL 8 · Streamlit · Plotly · draw.io ·
 │   ├── db_manager.py     # Singleton DatabaseConnection (shared pool, transactions, error translation)
 │   ├── exceptions.py     # application exceptions (validation, business rules, not found, …)
 │   ├── models/           # Entity classes: Employee, Position, Project, Assignment, Review
-│   ├── dal/              # Data Access Layer managers (employees, projects, reviews, analytics, ETL)
+│   ├── dal/              # Data Access Layer managers (employees, projects, reviews, analytics, ETL, schema)
 │   └── synthesizer/      # Data synthesizer (pandas + Faker)
 ├── sql/                  # DDL, DML, stored procedures, CTEs, window functions, validation queries
-├── scripts/              # setup_database.py (builds the schemas), run_etl.py (runs the ETL)
+├── scripts/              # command-line front ends: setup_database.py (SchemaManager), run_etl.py (EtlManager)
 ├── analysis/             # dataset profiling that drove the schema design
 ├── diagrams/             # Editable draw.io ER and dimensional-model diagrams
 ├── data/raw/             # IBM HR Analytics source dataset
@@ -87,7 +87,7 @@ Design, OOP principles and decisions: [`docs/backend_design.md`](docs/backend_de
 python -m pytest -q                        # everything (needs MySQL with the ETL loaded)
 python -m pytest tests/test_models.py -q   # entity rules only — no database needed
 ```
-197 tests, about 5 minutes. Database tests run inside rolled-back transactions — they use the real
+211 tests, about 5 minutes. Database tests run inside rolled-back transactions — they use the real
 data and never change it; they skip themselves when MySQL or the loaded data is missing.
 
 ## Design documentation

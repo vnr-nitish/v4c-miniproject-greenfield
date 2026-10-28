@@ -96,9 +96,9 @@ class RiskFactor:
     condition: str
 
 
-# Calibrated on the warehouse (docs/backend_design.md B8): one-year attrition after a review is
-# about 2x as high with overtime (4.6 % vs 2.3 %), at job level 1 (5.5 % vs <= 2.7 %) and without
-# stock options (5.0 % vs <= 1.8 %); the one-point factors each add 1.3-2x.
+# Calibrated on the warehouse (docs/backend_design.md B8, B21): one-year attrition after a review
+# is about 3x as high with overtime (6.4 % vs 2.0 %), at job level 1 (5.5 % vs <= 2.7 %) and
+# without stock options (5.0 % vs <= 3.7 %); the one-point factors each add 1.5-2.6x.
 RISK_FACTORS = (
     RiskFactor("Works overtime", 2, "overtime_flag = 1"),
     RiskFactor("Entry level (job level 1)", 2, "job_level = 1"),
@@ -106,13 +106,15 @@ RISK_FACTORS = (
     RiskFactor("Less than 2 years at the company", 1, "tenure_years < 2"),
     RiskFactor("Low environment satisfaction", 1, "environment_satisfaction = 1"),
     RiskFactor("Low job satisfaction", 1, "job_satisfaction = 1"),
+    RiskFactor("Poor work-life balance", 1, "work_life_balance = 1"),
+    RiskFactor("Low job involvement", 1, "job_involvement = 1"),
     RiskFactor("Travels frequently", 1, "business_travel = 'Travel_Frequently'"),
     RiskFactor("Lives more than 10 km away", 1, "distance_from_home_km > 10"),
     RiskFactor("Paid in the lower half of the level", 1, "pay_quartile <= 2"),
 )
 MAX_RISK_SCORE = sum(f.points for f in RISK_FACTORS)
 
-# (lowest score, band), highest band first; back-tested one-year attrition 16.0 %, 6.8 %, 2.1 %, 0.9 %
+# (lowest score, band), highest band first; back-tested one-year attrition 19.5 %, 8.0 %, 1.9 %, 0.7 %
 RISK_BANDS = ((8, "Very high"), (6, "High"), (3, "Medium"), (0, "Low"))
 
 _SCORE_SQL = " + ".join(f"{f.points} * COALESCE({f.condition}, 0)" for f in RISK_FACTORS)
@@ -136,7 +138,7 @@ WITH ranked_reviews AS (
 ),
 latest_review AS (
     SELECT r.employee_id, f.date_sk, f.overtime_flag, f.environment_satisfaction, f.job_satisfaction,
-           f.performance_rating
+           f.work_life_balance, f.job_involvement, f.performance_rating
     FROM ranked_reviews r
     JOIN hr_dw.fact_performance_reviews f ON f.review_id = r.review_id
     WHERE r.rn = 1
@@ -145,8 +147,8 @@ workforce AS (
     SELECT e.employee_sk, e.job_level, e.stock_option_level, e.business_travel, e.distance_from_home_km,
            TIMESTAMPDIFF(YEAR, e.hire_date, CURDATE())                         AS tenure_years,
            NTILE(4) OVER (PARTITION BY e.job_level ORDER BY e.monthly_income)   AS pay_quartile,
-           r.overtime_flag, r.environment_satisfaction, r.job_satisfaction,
-           r.performance_rating AS last_rating, r.date_sk AS last_review_sk
+           r.overtime_flag, r.environment_satisfaction, r.job_satisfaction, r.work_life_balance,
+           r.job_involvement, r.performance_rating AS last_rating, r.date_sk AS last_review_sk
     FROM hr_dw.dim_employee e
     LEFT JOIN latest_review r ON r.employee_id = e.employee_id
     WHERE e.is_current AND e.exit_date IS NULL
@@ -165,7 +167,7 @@ explained AS (
 SELECT e.employee_id, e.employee_code, e.full_name, e.department_name, e.job_role, e.job_level, e.manager_name,
        b.tenure_years, e.monthly_income, b.pay_quartile, e.stock_option_level, e.business_travel,
        e.distance_from_home_km, b.overtime_flag, b.environment_satisfaction, b.job_satisfaction,
-       b.last_rating, d.full_date AS last_review_date,
+       b.work_life_balance, b.job_involvement, b.last_rating, d.full_date AS last_review_date,
        b.score, b.risk_band, b.band_order, b.risk_percentile, b.risk_factors,
        {", ".join(f"b.factor_{i}" for i in range(len(RISK_FACTORS)))}
 FROM explained b
@@ -444,7 +446,7 @@ class AnalyticsManager(DatabaseConnection):
 
     def scored_workforce(self) -> pd.DataFrame:
         """Every active employee with their attrition-risk score, band, percentile and factors
-        (factor_0 … factor_8 are the RISK_FACTORS flags). One query for the whole company; the
+        (factor_0, factor_1, … are the RISK_FACTORS flags). One query for the whole company; the
         filtered views below are slices of it."""
         return self._cached(("scored_workforce",), lambda: self.fetch_frame(_SCORED_WORKFORCE_SQL))
 
@@ -492,7 +494,8 @@ class AnalyticsManager(DatabaseConnection):
         sql = f"""
             WITH observed AS (
                 SELECT f.overtime_flag, de.job_level, de.stock_option_level, f.environment_satisfaction,
-                       f.job_satisfaction, de.business_travel, de.distance_from_home_km,
+                       f.job_satisfaction, f.work_life_balance, f.job_involvement,
+                       de.business_travel, de.distance_from_home_km,
                        TIMESTAMPDIFF(YEAR, de.hire_date, d.full_date) AS tenure_years,
                        NTILE(4) OVER (PARTITION BY d.fiscal_year, de.job_level
                                       ORDER BY f.monthly_income_at_review) AS pay_quartile,

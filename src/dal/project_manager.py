@@ -24,23 +24,31 @@ class ProjectManager(DatabaseConnection):
     # ------------------------------------------------------------------ projects
 
     def create(self, project: Project) -> Project:
-        """Create a project; the next project code (PRJ + 5 digits) is assigned by the database."""
+        """Create a project; the next project code (PRJ + 5 digits) is assigned by the database
+        (retried with the code after it if a simultaneous insert took it first)."""
         if project.project_id is not None:
             raise ValidationError("A new project has no project id yet")
-        with self.transaction() as cur:
-            self._require_active_employee(cur, project.project_manager_id, "The project manager")
-            cur.execute(
-                "INSERT INTO hr_oltp.projects (project_code, project_name, description, department_id, "
-                "       project_manager_id, start_date, planned_end_date, actual_end_date, budget, status, priority) "
-                "SELECT CONCAT('PRJ', LPAD(COALESCE(CAST(SUBSTRING(MAX(project_code), 4) AS UNSIGNED), 0) + 1, 5, '0')), "
-                "       %s, %s, %s, %s, %s, %s, %s, %s, %s, %s "
-                "FROM hr_oltp.projects",
-                (project.project_name, project.description, project.department_id, project.project_manager_id,
-                 project.start_date, project.planned_end_date, project.actual_end_date, project.budget,
-                 project.status, project.priority))
-            project_id = cur.lastrowid
-            cur.execute("SELECT project_code FROM hr_oltp.projects WHERE project_id = %s", (project_id,))
-            (code,) = cur.fetchone()
+
+        def insert() -> tuple[int, str]:
+            with self.transaction() as cur:
+                self._require_active_employee(cur, project.project_manager_id, "The project manager")
+                cur.execute(
+                    "INSERT INTO hr_oltp.projects (project_code, project_name, description, department_id, "
+                    "       project_manager_id, start_date, planned_end_date, actual_end_date, budget, status, "
+                    "       priority) "
+                    "SELECT CONCAT('PRJ', LPAD(COALESCE(CAST(SUBSTRING(MAX(project_code), 4) AS UNSIGNED), 0) + 1, "
+                    "                          5, '0')), "
+                    "       %s, %s, %s, %s, %s, %s, %s, %s, %s, %s "
+                    "FROM hr_oltp.projects",
+                    (project.project_name, project.description, project.department_id, project.project_manager_id,
+                     project.start_date, project.planned_end_date, project.actual_end_date, project.budget,
+                     project.status, project.priority))
+                project_id = cur.lastrowid
+                cur.execute("SELECT project_code FROM hr_oltp.projects WHERE project_id = %s", (project_id,))
+                (code,) = cur.fetchone()
+            return project_id, code
+
+        project_id, code = self.run_with_retry(insert, unique_key="uq_projects_code")
         logger.info("Created project %s (id %s)", code, project_id)
         return project.with_changes(project_id=project_id, project_code=code)
 

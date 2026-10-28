@@ -6,26 +6,30 @@ connection whose work is rolled back at the end, so the real data is used and ne
 session, so they also exercise the cache.
 They need a completed ETL run:  python scripts/run_etl.py --migrate
 """
+import threading
+import time
 from dataclasses import replace
 from datetime import date, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
 
+import mysql.connector
 import pandas as pd
 import pytest
 
 from src.dal import (AnalyticsFilter, AnalyticsManager, EmployeeManager, EtlManager, ProjectManager,
-                     ReferenceDataManager, ReviewManager)
+                     ReferenceDataManager, ReviewManager, SchemaManager)
 from src.dal.analytics_manager import MAX_RISK_SCORE, RISK_BANDS, RISK_FACTORS
 from src.db_manager import DatabaseConnection
-from src.exceptions import (BusinessRuleError, DuplicateError, HRAppError, NotFoundError, OverAllocationError,
-                            ValidationError)
+from src.exceptions import (BusinessRuleError, DatabaseError, DuplicateError, HRAppError, NotFoundError,
+                            OverAllocationError, ValidationError)
 from src.models import Assignment, Employee, Position, Project, Review
 from src.models.review import RATING_LABELS
 
 HR, RND, SALES = 1, 2, 3             # sql/02_oltp_reference_data.sql
-MANAGERS = (EmployeeManager, ProjectManager, ReviewManager, AnalyticsManager, ReferenceDataManager, EtlManager)
+MANAGERS = (EmployeeManager, ProjectManager, ReviewManager, AnalyticsManager, ReferenceDataManager, EtlManager,
+            SchemaManager)
 
 
 def one(sql, params=None):
@@ -135,6 +139,74 @@ def test_a_failed_step_undoes_only_itself(session, picks):
     with pytest.raises(BusinessRuleError):
         EmployeeManager().change_position(hired.employee_id, lab_position(picks))      # nothing changed
     assert EmployeeManager().get(hired.employee_id) == hired                          # earlier step kept
+
+
+def hold_every_connection() -> list:
+    pool = DatabaseConnection._pool
+    return [pool.get_connection() for _ in range(pool.pool_size)]
+
+
+def test_a_busy_pool_waits_for_a_free_connection(monkeypatch):
+    """Decision B18: with every connection in use, a request waits instead of failing."""
+    monkeypatch.setattr(DatabaseConnection, "_pool_wait", 5.0)
+    held = hold_every_connection()
+    try:
+        threading.Timer(0.5, held.pop().close).start()          # another user finishes in 0.5 s
+        started = time.monotonic()
+        assert value("SELECT 1 AS one") == 1
+        assert time.monotonic() - started >= 0.4
+    finally:
+        for conn in held:
+            conn.close()
+
+
+def test_a_pool_busy_for_too_long_gives_a_clear_error(monkeypatch):
+    monkeypatch.setattr(DatabaseConnection, "_pool_wait", 0.3)
+    held = hold_every_connection()
+    try:
+        with pytest.raises(DatabaseError, match="connections are busy"):
+            value("SELECT 1 AS one")
+    finally:
+        for conn in held:
+            conn.close()
+
+
+def onboard_calls(monkeypatch, fail_times: int) -> list:
+    """Make the first `fail_times` onboarding calls fail as if a simultaneous hire took the code."""
+    original = DatabaseConnection.call_in
+    calls = []
+
+    def call_in(cursor, name, args=(), out_params=0):
+        if name == "hr_oltp.sp_onboard_employee":
+            calls.append(name)
+            if len(calls) <= fail_times:
+                raise mysql.connector.Error(msg="Duplicate entry 'EMP100001' for key 'employees.uq_employees_code'",
+                                            errno=1062)
+        return original(cursor, name, args, out_params)
+
+    monkeypatch.setattr(EmployeeManager, "call_in", staticmethod(call_in))
+    return calls
+
+
+def test_a_code_taken_by_a_simultaneous_hire_is_retried(session, picks, monkeypatch):
+    """Decision B19: the second of two simultaneous hires gets the next code instead of an error."""
+    calls = onboard_calls(monkeypatch, fail_times=1)
+    hired = hire(picks)
+    assert len(calls) == 2
+    assert value("SELECT COUNT(*) AS n FROM hr_oltp.employees WHERE email = %s", (hired.email,)) == 1
+    assert len(EmployeeManager().history(hired.employee_id)) == 1        # the failed attempt left nothing
+
+
+def test_retrying_gives_up_and_other_duplicates_are_not_retried(session, picks, monkeypatch):
+    calls = onboard_calls(monkeypatch, fail_times=99)
+    with pytest.raises(DuplicateError, match="employee code already exists"):
+        hire(picks)
+    assert len(calls) == 3
+    calls = onboard_calls(monkeypatch, fail_times=0)
+    taken_email = value("SELECT email FROM hr_oltp.employees ORDER BY employee_id LIMIT 1")
+    with pytest.raises(DuplicateError, match="e-mail address is already used"):
+        hire(picks, email=taken_email)
+    assert len(calls) == 1
 
 
 # ----------------------------------------------------------------------------- reference data

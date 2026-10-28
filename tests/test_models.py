@@ -245,6 +245,17 @@ def test_mysql_errors_become_application_errors(errno, message, expected_type, e
     assert isinstance(err, HRAppError)
 
 
+@pytest.mark.parametrize("errno, message, constraint", [
+    (1062, "Duplicate entry 'EMP100001' for key 'employees.uq_employees_code'", "uq_employees_code"),
+    (1452, "... a foreign key constraint fails (`hr_oltp`.`x`, CONSTRAINT `fk_reviews_project` FOREIGN KEY", "fk_reviews_project"),
+    (3819, "Check constraint 'ck_reviews_not_self' is violated.", "ck_reviews_not_self"),
+    (1406, "Data too long for column 'first_name' at row 1", None),
+])
+def test_the_constraint_behind_an_error_is_kept(errno, message, constraint):
+    """run_with_retry uses it to retry only a generated code that was taken (decision B19)."""
+    assert translate_error(mysql.connector.Error(msg=message, errno=errno)).constraint == constraint
+
+
 def test_duplicates_are_business_rule_errors():
     assert issubclass(DuplicateError, BusinessRuleError)
 
@@ -277,7 +288,7 @@ def test_filter_selects_dataframe_rows():
 
 
 def test_risk_bands_cover_every_score():
-    assert MAX_RISK_SCORE == 12 and len(RISK_FACTORS) == 9
+    assert MAX_RISK_SCORE == 14 and len(RISK_FACTORS) == 11
     lows = [low for low, _ in RISK_BANDS]
     assert lows == sorted(lows, reverse=True) and lows[-1] == 0
     # personal characteristics are not risk factors (backend_design.md B8)

@@ -5,6 +5,7 @@ from src.dal.etl_manager import EtlManager
 from src.dal.project_manager import ProjectManager
 from src.dal.reference_manager import ReferenceDataManager
 from src.dal.review_manager import ReviewManager
+from src.dal.schema_manager import SchemaManager, SqlScript
 
 __all__ = ["AnalyticsFilter", "AnalyticsManager", "EmployeeManager", "PositionChange", "EtlManager",
-           "ProjectManager", "ReferenceDataManager", "ReviewManager"]
+           "ProjectManager", "ReferenceDataManager", "ReviewManager", "SchemaManager", "SqlScript"]

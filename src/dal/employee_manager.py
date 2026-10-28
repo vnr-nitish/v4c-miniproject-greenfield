@@ -56,19 +56,26 @@ class EmployeeManager(DatabaseConnection):
     def onboard(self, employee: Employee, position: Position) -> Employee:
         """Hire a person: OLTP rows and the first warehouse version, in one transaction.
 
-        Returns the employee with the id and code the database assigned.
+        Returns the employee with the id and code the database assigned. If someone else is
+        onboarded at the same moment and takes the next code first, the hire is retried with
+        the code after it.
         """
         if employee.employee_id is not None or employee.exit_date is not None:
             raise ValidationError("A new hire has no employee id and no exit date yet")
-        with self.transaction() as cur:
-            employee_id, employee_code = self.call_in(cur, "hr_oltp.sp_onboard_employee", (
-                employee.first_name, employee.last_name, employee.email, employee.phone, employee.gender,
-                employee.date_of_birth, employee.marital_status, employee.education_level_id,
-                employee.education_field_id, employee.distance_from_home_km, employee.prior_experience_years,
-                employee.prior_companies_count, employee.hire_date, position.department_id, position.job_role_id,
-                position.job_level_id, position.manager_id, position.monthly_income, position.stock_option_level,
-                position.business_travel), out_params=2)
-            self.call_in(cur, "hr_dw.sp_scd2_apply_employee", (employee_id,), out_params=1)
+
+        def hire() -> tuple[int, str]:
+            with self.transaction() as cur:
+                employee_id, employee_code = self.call_in(cur, "hr_oltp.sp_onboard_employee", (
+                    employee.first_name, employee.last_name, employee.email, employee.phone, employee.gender,
+                    employee.date_of_birth, employee.marital_status, employee.education_level_id,
+                    employee.education_field_id, employee.distance_from_home_km, employee.prior_experience_years,
+                    employee.prior_companies_count, employee.hire_date, position.department_id,
+                    position.job_role_id, position.job_level_id, position.manager_id, position.monthly_income,
+                    position.stock_option_level, position.business_travel), out_params=2)
+                self.call_in(cur, "hr_dw.sp_scd2_apply_employee", (employee_id,), out_params=1)
+            return employee_id, employee_code
+
+        employee_id, employee_code = self.run_with_retry(hire, unique_key="uq_employees_code")
         logger.info("Onboarded %s (id %s)", employee_code, employee_id)
         return employee.with_changes(employee_id=employee_id, employee_code=employee_code)
 

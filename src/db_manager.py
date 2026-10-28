@@ -9,6 +9,8 @@ Design (docs/synthesizer_design.md D22, docs/backend_design.md):
   back, via context managers.
 - MySQL errors are translated into the application's exceptions (src/exceptions.py) with a
   message a user can act on, e.g. "This e-mail address is already used by another employee".
+- Several users at once: a request waits briefly for a free connection instead of failing, and
+  a generated key taken by a simultaneous insert is retried (run_with_retry).
 - rollback_session() pins every manager to one connection whose work is always rolled back —
   used by the tests, so they can exercise the real data without ever changing it.
 """
@@ -18,11 +20,12 @@ import logging
 import os
 import re
 import threading
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Iterator, Sequence
+from typing import Any, Callable, Iterator, Sequence, TypeVar
 
 import mysql.connector
 import pandas as pd
@@ -68,7 +71,13 @@ CONSTRAINT_MESSAGES = {
 # Values MySQL refuses for a column (NULL in NOT NULL, too long, out of range, wrong type/date)
 _INPUT_ERRORS = {1048, 1264, 1265, 1292, 1366, 1406}
 
+# The constraint a MySQL message names: "for key 'employees.uq_employees_email'" (1062),
+# "CONSTRAINT `fk_reviews_project` FOREIGN KEY" (1451 / 1452), "Check constraint 'ck_…'" (3819)
+_CONSTRAINT_NAME = re.compile(r"(?:for key '(?:\w+\.)?|CONSTRAINT `|[Cc]heck constraint ')(\w+)")
+
 _pinned = threading.local()           # the connection of an active rollback_session, per thread
+
+T = TypeVar("T")
 
 
 def translate_error(err: mysql.connector.Error) -> HRAppError:
@@ -80,19 +89,24 @@ def translate_error(err: mysql.connector.Error) -> HRAppError:
     3819 CHECK constraint        -> ValidationError
     1048, 1264, 1406 … bad value -> ValidationError
     anything else                -> DatabaseError
+    The constraint named in the message, if any, is kept in the exception's `constraint`.
     """
     message = err.msg or str(err)
-    friendly = next((text for (errno, name), text in CONSTRAINT_MESSAGES.items()
-                     if errno == err.errno and name in message), message)
+    match = _CONSTRAINT_NAME.search(message)
+    constraint = match.group(1) if match else None
+    friendly = CONSTRAINT_MESSAGES.get((err.errno, constraint), message)
     if err.errno == 1644:
-        return BusinessRuleError(message)
-    if err.errno == 1062:
-        return DuplicateError(friendly)
-    if err.errno in (1451, 1452):
-        return BusinessRuleError(friendly)
-    if err.errno == 3819 or err.errno in _INPUT_ERRORS:
-        return ValidationError(friendly)
-    return DatabaseError(f"{err.errno}: {message}" if err.errno else message)
+        error: HRAppError = BusinessRuleError(message)
+    elif err.errno == 1062:
+        error = DuplicateError(friendly)
+    elif err.errno in (1451, 1452):
+        error = BusinessRuleError(friendly)
+    elif err.errno == 3819 or err.errno in _INPUT_ERRORS:
+        error = ValidationError(friendly)
+    else:
+        error = DatabaseError(f"{err.errno}: {message}" if err.errno else message)
+    error.constraint = constraint
+    return error
 
 
 @dataclass(frozen=True)
@@ -104,6 +118,7 @@ class DatabaseSettings:
     user: str
     password: str
     pool_size: int = 5
+    pool_wait_seconds: float = 10.0          # how long a request waits when every connection is busy
 
     @classmethod
     def from_env(cls, env_file: Path | None = None) -> "DatabaseSettings":
@@ -115,6 +130,7 @@ class DatabaseSettings:
                 user=os.environ["DB_USER"],
                 password=os.environ["DB_PASSWORD"],
                 pool_size=int(os.getenv("DB_POOL_SIZE", "5")),
+                pool_wait_seconds=float(os.getenv("DB_POOL_WAIT", "10")),
             )
         except KeyError as missing:
             raise ConfigurationError(f"Missing database setting {missing} (see .env.example)") from None
@@ -127,6 +143,7 @@ class DatabaseConnection:
 
     _instances: dict[type, "DatabaseConnection"] = {}
     _pool: pooling.MySQLConnectionPool | None = None
+    _pool_wait: float = 10.0
     _lock = threading.RLock()
 
     def __new__(cls, *args: Any, **kwargs: Any) -> "DatabaseConnection":
@@ -138,7 +155,9 @@ class DatabaseConnection:
     def __init__(self, settings: DatabaseSettings | None = None) -> None:
         with DatabaseConnection._lock:
             if DatabaseConnection._pool is None:
-                DatabaseConnection._pool = self._create_pool(settings or DatabaseSettings.from_env())
+                settings = settings or DatabaseSettings.from_env()
+                DatabaseConnection._pool = self._create_pool(settings)
+                DatabaseConnection._pool_wait = settings.pool_wait_seconds
 
     # ------------------------------------------------------------------ pool management
 
@@ -174,20 +193,52 @@ class DatabaseConnection:
     def connection(self) -> Iterator[Any]:
         """Borrow a pooled connection; it is always returned to the pool.
 
-        Inside a rollback_session the session's pinned connection is used instead.
+        When every connection is in use (several dashboard users at once), the request waits up
+        to `pool_wait_seconds` for one to be returned instead of failing at once. A connection
+        the server has closed is reconnected by the pool itself. Inside a rollback_session the
+        session's pinned connection is used instead.
         """
         pinned = getattr(_pinned, "connection", None)
         if pinned is not None:
             yield pinned
             return
-        try:
-            conn = DatabaseConnection._pool.get_connection()
-        except mysql.connector.Error as err:
-            raise DatabaseError(f"No database connection available: {err}") from err
+        conn = self._borrow()
         try:
             yield conn
         finally:
             conn.close()            # returns the connection to the pool
+
+    @staticmethod
+    def _borrow() -> Any:
+        deadline = time.monotonic() + DatabaseConnection._pool_wait
+        while True:
+            try:
+                return DatabaseConnection._pool.get_connection()
+            except mysql.connector.errors.PoolError as err:          # all connections in use
+                if time.monotonic() >= deadline:
+                    raise DatabaseError(f"All {DatabaseConnection._pool.pool_size} database connections are "
+                                        "busy — please try again in a moment") from err
+                time.sleep(0.05)
+            except mysql.connector.Error as err:
+                raise DatabaseError(f"No database connection available: {err}") from err
+
+    def run_with_retry(self, work: Callable[[], T], unique_key: str, attempts: int = 3) -> T:
+        """Run `work` — one transaction that generates a new key, such as the next employee code
+        — and run it again if a simultaneous insert took that key first.
+
+        Two users saving at the same moment read the same highest code; the UNIQUE key refuses
+        the second insert, its transaction is rolled back, and the next attempt reads the new
+        highest code. Any other error, or the same one `attempts` times, is raised.
+        """
+        for attempt in range(1, attempts + 1):
+            try:
+                return work()
+            except DuplicateError as err:
+                if err.constraint != unique_key or attempt == attempts:
+                    raise
+                logger.warning("%s was taken by a simultaneous insert; retrying (attempt %s of %s)",
+                               unique_key, attempt + 1, attempts)
+        raise AssertionError("unreachable")
 
     @contextmanager
     def transaction(self, dictionary: bool = False) -> Iterator[Any]:

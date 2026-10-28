@@ -6,8 +6,9 @@
 **Code:** [`src/db_manager.py`](../src/db_manager.py) · [`src/exceptions.py`](../src/exceptions.py) ·
 [`src/models/`](../src/models/) · [`src/dal/`](../src/dal/) ·
 [`sql/07_oltp_procedures.sql`](../sql/07_oltp_procedures.sql) (onboarding, exits, shared position rules)
-**Proof:** [`tests/test_models.py`](../tests/test_models.py) (68 tests, no database) ·
-[`tests/test_managers.py`](../tests/test_managers.py) (47 tests on the 100K data)
+**Proof:** [`tests/test_models.py`](../tests/test_models.py) (72 tests, no database) ·
+[`tests/test_managers.py`](../tests/test_managers.py) (51 tests on the 100K data) ·
+[`tests/test_schema_manager.py`](../tests/test_schema_manager.py) (6 tests)
 
 ---
 
@@ -29,9 +30,10 @@ encapsulation and error handling."* Phase 4 builds its forms and dashboards on t
 |---|---|
 | Singleton `DatabaseConnection` in `db_manager.py` | `src/db_manager.py` — one instance per class, one shared connection pool (§5) |
 | Entity classes Employee, Project, Review | `src/models/` — plus `Position` and `Assignment`, which the forms need (§4) |
-| Managers inheriting from the DB class | `src/dal/` — six managers, each `class …Manager(DatabaseConnection)` (§7) |
+| Managers inheriting from the DB class | `src/dal/` — seven managers, each `class …Manager(DatabaseConnection)` (§7) |
 | CRUD | create / read / update for employees, projects, assignments, reviews; delete where the business allows it (§7) |
-| Robust try-except | every database call runs in `transaction()`: try → commit, except → rollback + translated error, finally → cursor closed, connection returned (§5) |
+| Robust try-except | every database call runs in `transaction()`: try → commit, except → rollback + translated error, finally → cursor closed, connection returned; a busy pool is waited for and a generated code taken by a simultaneous insert is retried (§5) |
+| "Moving away from functional programming" | every database operation is a method of a class that inherits from `DatabaseConnection`, schema installation included (`SchemaManager`); the files in `scripts/` are thin command-line front ends |
 
 ## 2. Layers
 
@@ -66,7 +68,8 @@ src/
     ├── project_manager.py     ProjectManager         projects and assignments
     ├── review_manager.py      ReviewManager          performance reviews
     ├── analytics_manager.py   AnalyticsManager       warehouse queries for the dashboards
-    └── etl_manager.py         EtlManager             runs the ETL procedures (Phase 2)
+    ├── etl_manager.py         EtlManager             runs the ETL procedures (Phase 2)
+    └── schema_manager.py      SchemaManager          installs the numbered SQL scripts (setup)
 ```
 
 ## 3. Class diagram
@@ -87,6 +90,7 @@ classDiagram
         +execute(sql, params) int
         +call_in(cursor, name, args, out_params)$ tuple
         +call_procedure(name, args, out_params) tuple
+        +run_with_retry(work, unique_key) result
     }
     class ReferenceDataManager {
         -_cache dict
@@ -124,6 +128,11 @@ classDiagram
     class EtlManager {
         +migrate_staging() run_warehouse_etl() recent_batches()
     }
+    class SchemaManager {
+        +scripts(only) server() loaded_tables()
+        +install(scripts, force) run_script(script)
+    }
+    DatabaseConnection <|-- SchemaManager
     DatabaseConnection <|-- ReferenceDataManager
     DatabaseConnection <|-- EmployeeManager
     DatabaseConnection <|-- ProjectManager
@@ -197,9 +206,9 @@ Every entity is an **immutable (frozen) dataclass** that inherits from the abstr
 | `Assignment` | `hr_oltp.project_assignments` | allocation 1–100 %, role 1–30, end ≥ start | `is_open`, `active_on()`, `end()` |
 | `Review` | `hr_oltp.performance_reviews` | not self-reviewed; rating 1–4; KPI 0–100; training 0–20; year 2000–2100; held in the review year or the next | `rating_label` (IBM scale), `is_outstanding`, `is_held_in_following_year` |
 
-**The rules were checked against the data:** all 1,377,237 OLTP rows (100,000 employees,
-308,986 job versions, 2,000 projects, 503,240 assignments, 463,011 reviews) were loaded into
-their entity classes. The first run rejected 153 surnames such as **"D’Alia"** — they use the
+**The rules were checked against the data:** all 1,377,241 OLTP rows (100,000 employees,
+308,986 job versions, 2,000 projects, 503,240 assignments, 463,015 reviews; checked again after
+the review-history fix) were loaded into their entity classes. The first run rejected 153 surnames such as **"D’Alia"** — they use the
 typographic apostrophe ’, which the name rule did not allow. The rule was wrong, not the data;
 after the fix, 0 rows are rejected. Python and the database therefore agree on what is valid.
 
@@ -232,6 +241,19 @@ with self.transaction() as cur:        # borrows a pooled connection
 Every manager method runs its work inside `transaction()`, so the error handling is written once
 and cannot be forgotten. A rollback that itself fails is logged and the *original* error is
 raised (it is the one that explains what happened).
+
+**Several users at once** (decisions B18, B19):
+- **A busy pool is waited for.** When all five connections are in use, for example during
+  several long dashboard queries, a request waits up to `DB_POOL_WAIT` seconds (default 10) for
+  one to be returned. Only then does it fail, with "All 5 database connections are busy —
+  please try again in a moment". A connection the server has closed in the meantime is
+  reconnected by the pool itself.
+- **A taken code is retried.** Two users onboarding at the same moment both read the highest
+  employee code, and the UNIQUE key refuses the second insert. `run_with_retry()` rolls that
+  attempt back and runs it again, reading the new highest code (up to 3 attempts). It retries
+  only when the constraint behind the error is the code's own unique key, which
+  `translate_error` reads from MySQL's message. A taken e-mail address, for instance, is
+  reported at once. Project creation works the same way.
 
 ### 5.3 MySQL errors become application errors
 
@@ -298,6 +320,7 @@ OLTP change and its warehouse update together, etl_design E3):
 | `ReferenceDataManager` | — | departments, **roles offered in a department**, levels a role allows with salary bands, manager candidates, education, exit reasons, ratings (cached) | — | — |
 | `AnalyticsManager` | — | the dashboard queries (§8) | — | — |
 | `EtlManager` | — | ETL batches, steps, rejected rows | runs the two ETL stages | — |
+| `SchemaManager` | installs the numbered SQL scripts (`scripts/setup_database.py`) | the scripts, the server version, which protected tables hold data | re-installs views and procedures (`--only 03 07 08`) | refuses to drop tables that hold data unless forced — checked before anything runs |
 
 Highlights:
 
@@ -310,9 +333,9 @@ Highlights:
   100 % it raises `OverAllocationError` with both numbers, and the form can offer "assign anyway"
   (`allow_over_allocation=True`) — over-allocation is real, and it is what bottleneck analysis
   looks for.
-- **Codes are generated by the database** (`MAX + 1` on the fixed-width code); if two users save at
-  the same moment, the UNIQUE key refuses the second with "This employee code already exists —
-  please try again".
+- **Codes are generated by the database** (`MAX + 1` on the fixed-width code). If two users
+  save at the same moment, the UNIQUE key refuses the second, and the manager retries it with
+  the next code (§5.2).
 - **When changes reach the warehouse (B5):** employee changes immediately (SCD Type 2 needs the
   version history); projects and reviews on the next ETL run (about 50 s, a "Run ETL" button in
   Phase 4), as a warehouse normally works. Deleting a planned project also removes its
@@ -338,42 +361,47 @@ names come from the code.
 ### 8.1 The attrition-risk score (decision B8)
 
 A transparent **points score**, not a black-box model. Each factor was measured on the warehouse
-— the share of employees who left within a year of a review (379,838 reviews with a fully
-observed following year; overall 3.16 %):
+— the share of employees who left within a year of a review (379,827 reviews with a fully
+observed following year; overall 3.15 %). Measured again after the review-history fix
+(synthesizer_design.md D26–D27; decision B21):
 
 | Factor | Points | Left within a year: with → without |
 |---|---|---|
-| Works overtime | 2 | 4.6 % → 2.3 % |
+| Works overtime | 2 | 6.4 % → 2.0 % |
 | Entry level (job level 1) | 2 | 5.5 % → 0.8–2.7 % |
-| No stock options | 2 | 5.0 % → 1.4–3.8 % |
+| No stock options | 2 | 5.0 % → 1.4–3.7 % |
 | Less than 2 years at the company | 1 | 4.9–5.1 % → 2.2–2.9 % |
-| Low environment satisfaction (1 of 4) | 1 | 4.6 % → 2.5–3.0 % |
-| Low job satisfaction (1 of 4) | 1 | 3.9 % → 2.4–3.5 % |
+| Low environment satisfaction (1 of 4) | 1 | 5.4 % → 2.5–3.0 % |
+| Low job satisfaction (1 of 4) | 1 | 4.4 % → 2.3–3.3 % |
+| Poor work-life balance (1 of 4) | 1 | 6.8 % → 2.8–3.4 % |
+| Low job involvement (1 of 4) | 1 | 7.4 % → 1.7–3.9 % |
 | Travels frequently | 1 | 4.7 % → 1.4–3.0 % |
 | Lives more than 10 km away | 1 | 3.9–4.2 % → 2.6–2.9 % |
-| Paid in the lower half of the level (`NTILE(4)` within level and cycle) | 1 | 3.7–4.5 % → 1.7–2.7 % |
+| Paid in the lower half of the level (`NTILE(4)` within level and cycle) | 1 | 3.7–4.5 % → 1.7–2.8 % |
 
 **Deliberately left out:**
 - **Marital status, age and gender.** "Single" does predict attrition here (5.1 % against 2.0 %),
   but these are protected personal characteristics. HR should not score people on them, and HR
-  cannot act on them. Leaving marital status out costs the score nothing: the lift of the top
-  band went *up*, from 14× to 18.5× the Low band.
+  cannot act on them. Leaving marital status out did not weaken the score (B9).
+- **Measures without a useful signal.**
+  - The performance rating: 3.2 % against 3.0 %.
+  - Relationship satisfaction: 4.2 % against 2.9 %, the weakest effect; left out to keep the
+    score compact.
 - **Patterns that contradict HR experience**, which are probably artifacts of the synthesis:
-  recently promoted people leaving most, low-rated people almost never leaving, and a
-  non-monotonic work-life balance pattern.
+  recently promoted people leaving most.
 
 **Bands and back-test** (`risk_backtest()`: every past review scored with what was known at the
 time, i.e. the employee version and survey of that review):
 
 | Band (score) | Share of reviews | Left within a year | Share of all leavers | Lift |
 |---|---|---|---|---|
-| Low (0–2) | 27.1 % | 0.86 % | 7.4 % | 0.27 |
-| Medium (3–5) | 51.7 % | 2.12 % | 34.8 % | 0.67 |
-| High (6–7) | 16.9 % | 6.77 % | 36.3 % | 2.14 |
-| Very high (8+) | 4.3 % | **15.95 %** | 21.5 % | **5.05** |
+| Low (0–2) | 29.8 % | 0.72 % | 6.9 % | 0.23 |
+| Medium (3–5) | 50.9 % | 1.84 % | 29.8 % | 0.58 |
+| High (6–7) | 15.4 % | 7.96 % | 38.9 % | 2.53 |
+| Very high (8+) | 3.9 % | **19.55 %** | 24.5 % | **6.21** |
 
-The High and Very high bands hold 21 % of employees but 58 % of the leavers. Today (83,878 active
-employees) the bands hold 28,255 / 45,838 / 8,968 / 817 people.
+The High and Very high bands hold 19 % of employees but 63 % of the leavers. Today (83,878 active
+employees) the bands hold 26,648 / 46,640 / 9,674 / 916 people.
 
 The score is computed **once for the whole company** (`scored_workforce()`); the risk list,
 summary and factor prevalence are slices of it. That way a dashboard filter can never change
@@ -381,23 +409,25 @@ anyone's score: pay quartiles and percentiles are always company-wide.
 
 ### 8.2 Cache and performance
 
-The warehouse holds 463,011 facts and 308,986 employee versions. The managers' writes take
+The warehouse holds 463,015 facts and 308,986 employee versions. The managers' writes take
 2–15 ms each (a department change with its SCD Type 2 step: 14 ms). The analytics queries,
 measured on the development laptop (MySQL 8.0.46, default 128 MB buffer pool):
 
 | Query | First call | Cached |
 |---|---|---|
-| `yoy_trends()` | 2.4 s (was 5.2 s) | 1 ms |
+| `yoy_trends()` | 2.4–2.7 s (was 5.2 s) | 1 ms |
 | `yoy_trends()` with a job-level filter | 4.6 s | 2 ms |
-| `attrition_trend()` | 3.6 s | 2 ms |
-| `top_performers()` (one cycle) | 4.9 s (was 7.9 s) | 3 ms |
-| `scored_workforce()` — every risk view | 17.8 s once (was 19.5 s **per view**, 36 s for the summary) | 8 ms; views 10–20 ms |
-| `risk_backtest()` | 20.2 s | 2 ms |
-| project queries, `overview()` | ≤ 0.25 s | ≤ 1 ms |
+| `attrition_trend()` | 3.4–3.6 s | 1–2 ms |
+| `top_performers()` (one cycle) | 4.9–5.2 s (was 7.9 s) | 2–3 ms |
+| `scored_workforce()` — every risk view | 18–20 s once (was 19.5 s **per view**, 36 s for the summary) | 8–16 ms; views 10–20 ms |
+| `risk_backtest()` | 20–22 s | 2–9 ms |
+| project queries, `overview()` | ≤ 0.75 s | ≤ 1 ms |
+
+(Ranges: measured before and after the review-history fix; the data volume is the same.)
 
 How it got there (each step measured with `EXPLAIN ANALYZE`):
 - `yoy_trends()` joins `dim_employee` only when a job-level filter needs it. The join costs
-  463,011 single-row lookups, about 3 s.
+  463,015 single-row lookups, about 3 s.
 - `top_performers()` checks "still employed" *after* aggregating. As a scan filter, the
   optimizer underestimated it (30K estimated, 265K actual) and read every active employee's
   reviews before applying the cycle filter.
@@ -418,14 +448,22 @@ results.
 
 ### 8.3 Notes on the data the dashboards will show
 
-- **The latest cycle (FY2025-26) looks different.** It has 0 % low ratings (about 4 % before),
-  24 % overtime (35–37 % before), and an average rating up by 0.039. The latest review of
-  every employee carries the original IBM values (Phase 1 design: the snapshot is reproduced
-  exactly), and IBM's PerformanceRating only uses 3 and 4. The Phase 4 chart has to explain
-  this step rather than present it as a trend.
-- **Ties at the top.** In a single cycle, dozens of people per department have rating 4 and
-  KPI 100.00. `DENSE_RANK()` correctly gives them all rank 1 (`sharing_rank` says how many).
-  Over three cycles with at least two reviews, the ranks separate cleanly (`sharing_rank` = 1).
+- **Resolved: the step in the latest cycle.** The first version of the data had a jump in
+  FY2025-26: 0 % low ratings against about 4 % before, 24 % overtime against 35–37 %, and the
+  average rating up by 0.039. The latest review carries IBM's values, and IBM uses only ratings
+  3 and 4, while earlier years had been generated differently. Fixed at the source, in the
+  synthesizer (D26–D27, journal step 20). Now:
+  - average rating 3.151–3.155 and outstanding share 15.1–15.5 % in every cycle;
+  - year-over-year rating changes of 0.001–0.003;
+  - overtime falling smoothly from 26.7 % to 24.1 %, because earlier cycles hold more people
+    who later left.
+
+  Rating and KPI lines are therefore nearly flat. The variation worth showing is by department,
+  by job level, in overtime and in attrition. No trend was invented (decision H2).
+- **Resolved: ties at the top.** KPI scores used to be clipped at 100, so dozens of people per
+  department shared rank 1. They are now drawn without pile-ups, and rank 1 in a single cycle is
+  shared by 1–3 people (latest cycle: HR 1, R&D 3, Sales 2). `DENSE_RANK()` still gives true
+  ties the same rank, and `sharing_rank` says how many share it.
 - **Attrition per fiscal year, not "the last 12 months".** The synthesized history ends on
   2026-06-30, so a rolling window ending today would include four months without data.
   FY2026-27 is shown as running (`is_complete = 0`).
@@ -436,7 +474,7 @@ results.
 |---|---|
 | **Abstraction** | `Entity` is an abstract base class: `validation_errors()` is abstract, every entity must implement it. Managers expose business operations (`onboard`, `change_position`, `assign`) and hide SQL, procedures and transactions. |
 | **Encapsulation** | Entities are frozen and validate themselves, so their state cannot be made invalid. Managers keep their caches and the pool private. The SQL of each area lives only in its manager. Callers see application exceptions, never MySQL error numbers. |
-| **Inheritance** | Six managers inherit connection handling, transactions, error translation and the Singleton from `DatabaseConnection`. Five entities inherit construction-time validation, `from_row`, `to_record` and `with_changes` from `Entity`. |
+| **Inheritance** | Seven managers inherit connection handling, transactions, error translation, the retry of taken codes and the Singleton from `DatabaseConnection`. Five entities inherit construction-time validation, `from_row`, `to_record` and `with_changes` from `Entity`. |
 | **Polymorphism** | `Entity.__post_init__` calls `self._normalize()` and `self.validation_errors()`, and each subclass supplies its own. `Entity.from_row(row)` builds the right subclass. Every manager uses the same `transaction()`, whatever it does inside. |
 | **Singleton** | `DatabaseConnection.__new__`, one instance per class (§5.1) |
 | **Value objects** | `PositionChange`, `AnalyticsFilter`, `RiskFactor` — small immutable results and parameters |
@@ -445,12 +483,13 @@ results.
 
 | File | Tests | Covers |
 |---|---|---|
-| `tests/test_models.py` | 68, no database, 0.7 s | every entity rule (parametrized), immutability, `with_changes` re-validation, normalization, NumPy values, all-errors-at-once, behaviour (`delay_days`, `tenure_on`, …), `from_row` round trip; MySQL error translation; `AnalyticsFilter` SQL and validation; risk bands cover every score and contain no personal characteristic |
-| `tests/test_managers.py` | 47, on the 100K data, ≈ 1 min 45 s | Singletons on one pool; the rollback session leaves no trace; a failed step undoes only itself; reference lists; onboarding (codes, warehouse version 1, invalid hires refused and leaving nothing); **department change = SCD2 step**; promotion reason; Type 1 corrections on every version; exits (assignments closed, attrition flag, no later changes); projects (codes, update, closing ends assignments, over-allocation, invalid assignments, deletion rules, warehouse batch); reviews (submit / duplicate / future / reviewer not employed / withdraw / final once warehoused / form suggestions); analytics checked against **independent SQL**: totals, `LAG` arithmetic, dense ranks without gaps, rank-1 = the best in a direct query, score = sum of its factors, bands and percentiles consistent, back-test monotonic, point-in-time leavers = exits per year, filters respected, cached copies, cache bypass in a session |
+| `tests/test_models.py` | 72, no database, 0.7 s | every entity rule (parametrized), immutability, `with_changes` re-validation, normalization, NumPy values, all-errors-at-once, behaviour (`delay_days`, `tenure_on`, …), `from_row` round trip; MySQL error translation and the constraint it names; `AnalyticsFilter` SQL and validation; risk bands cover every score and contain no personal characteristic |
+| `tests/test_managers.py` | 51, on the 100K data, ≈ 2 min | Singletons on one pool; the rollback session leaves no trace; a failed step undoes only itself; **a busy pool waits, and fails clearly after the limit; a code taken by a simultaneous hire is retried, other duplicates are not**; reference lists; onboarding (codes, warehouse version 1, invalid hires refused and leaving nothing); **department change = SCD2 step**; promotion reason; Type 1 corrections on every version; exits (assignments closed, attrition flag, no later changes); projects (codes, update, closing ends assignments, over-allocation, invalid assignments, deletion rules, warehouse batch); reviews (submit / duplicate / future / reviewer not employed / withdraw / final once warehoused / form suggestions); analytics checked against **independent SQL**: totals, `LAG` arithmetic, dense ranks without gaps, rank-1 = the best in a direct query, score = sum of its factors, bands and percentiles consistent, back-test monotonic, point-in-time leavers = exits per year, filters respected, cached copies, cache bypass in a session |
+| `tests/test_schema_manager.py` | 6 | the SQL splitter (delimiters, quotes, comments); script selection; **a rebuild over loaded data is refused before anything runs** (the execution step is replaced by one that fails the test); scripts run on the shared pool and a failing statement names its file |
 
-Whole suite: **197 tests pass** (82 from Phases 1–2 + 115 new), ≈ 5 minutes. After the run, every
-table count equals the loaded data (100,000 employees, 308,986 versions in OLTP and warehouse,
-463,011 reviews and facts) — the tests left nothing behind.
+Whole suite: **211 tests pass** (82 from Phases 1–2 + 129 new), ≈ 5 minutes. After the run, a
+fingerprint (row count + checksum) of every OLTP and warehouse table equals the one taken before
+— the tests left nothing behind.
 
 ## 11. Decisions
 
@@ -477,9 +516,18 @@ Refinements made while implementing:
 | B12 | Repeated dashboard queries over 463K facts take seconds | **cache keyed by the latest finished batch**; project deletion now logged as a batch so the key stays exact |
 | B13 | `EXPLAIN ANALYZE`: a needless 463K-lookup join in `yoy_trends`; a misestimated filter in `top_performers` | join only when filtered (5.2 → 2.4 s); "still employed" checked after aggregation (7.9 → 4.9 s) |
 | B14 | "The last 12 months" of attrition would include four months after the data ends | **attrition per fiscal year** with point-in-time SCD2 headcounts |
-| B15 | 153 surnames like "D’Alia" were rejected by the name rule | the rule allows the typographic apostrophe; 0 of 1,377,237 rows rejected |
+| B15 | 153 surnames like "D’Alia" were rejected by the name rule | the rule allows the typographic apostrophe; 0 of 1,377,237 rows rejected (0 of 1,377,241 after the data fix) |
 | B16 | A foreign key means "does not exist" on insert but "still in use" on delete | messages keyed by **(error number, constraint)** |
 | B17 | Streamlit selections from DataFrames are NumPy values; integer sums came back as `45198.0` | entities convert NumPy values; `fetch_frame` keeps whole-number DECIMALs as integers |
+
+Added after the requirements review (suggestions S1–S3 and the data fix, approved):
+
+| ID | Found | Change |
+|---|---|---|
+| B18 | The driver's pool fails at once ("pool exhausted") when all 5 connections are busy — several dashboard users would see errors | requests wait up to `DB_POOL_WAIT` seconds (default 10) for a free connection, then fail with a clear message; stale connections were already reconnected by the driver |
+| B19 | Two simultaneous hires (or new projects) read the same highest code; the second got "please try again" | `run_with_retry()`: the refused attempt is rolled back and run again with the next code (up to 3 times) — only when the constraint behind the error is the code's own unique key, which `translate_error` now reads from MySQL's message |
+| B20 | `scripts/setup_database.py` was plain functions with its own MySQL connection, outside the Singleton | `SchemaManager(DatabaseConnection)` + `SqlScript`; the script is a thin command-line front end like `run_etl.py`. The splitter produces the same 112 statements as before; the data-protection guard runs before anything is executed |
+| B21 | The review-history fix (synthesizer D26) changed the overtime and survey history | factors measured again: overtime is now a stronger signal (6.4 % vs 2.0 %), and work-life balance 1 and job involvement 1 became clear, usable factors — both added (one point each). The band thresholds were kept; the top band's lift rose from 5.05 to 6.21 |
 
 ## 12. Questions you may be asked
 
@@ -531,10 +579,10 @@ Each step is a savepoint, so a refused step doesn't undo the earlier ones. One t
 nothing survives the session, and after the full suite every table count equals the loaded data.
 
 **Q: Is the attrition risk a machine-learning model?**
-No. It's a points score from nine work-related factors, each measured on the warehouse (§8.1).
+No. It's a points score from eleven work-related factors, each measured on the warehouse (§8.1).
 It's explainable (every employee's list shows the factors behind their score) and back-tested:
-the Very high band lost 16 % within a year, against 0.9 % for Low. A model could be more precise,
-but it would be a black box and an extra dependency beyond the brief.
+the Very high band lost 19.6 % within a year, against 0.7 % for Low. A model could be more
+precise, but it would be a black box and an extra dependency beyond the brief.
 
 **Q: Why isn't marital status in the score, if it predicts attrition?**
 It's a protected personal characteristic. Scoring people on it would be unfair, and HR can't act
@@ -547,10 +595,12 @@ different ranks. `RANK()` leaves gaps after ties (1, 1, 3). `DENSE_RANK()` gives
 the same rank and continues without a gap (1, 1, 2), so "top 3" means the three best results.
 `sharing_rank` shows how many people share each rank.
 
-**Q: Why does FY2025-26 look different from earlier years?**
-§8.3: the latest review of each employee carries the original IBM values. IBM's ratings are only
-3 or 4, so that cycle has no low ratings and less overtime. The step comes from the source
-snapshot, not a real trend.
+**Q: Why are the rating and KPI trend lines nearly flat?**
+Because nothing in the data makes them move, and no trend was invented. The first version of the
+data did show a jump in FY2025-26, but it came from the generator: the latest review is IBM's
+(ratings 3 and 4 only), while earlier years used the whole 1–4 scale. That was fixed at the
+source (§8.3, synthesizer D26), and every cycle now looks like the snapshot. The variation worth
+showing is by department, level, overtime and attrition.
 
 **Q: Does it handle 100,000 rows without performance degradation?**
 Writes are single-row operations and take milliseconds. Measured: onboarding with its warehouse
@@ -570,9 +620,24 @@ fragments written in the code itself. Filters are validated first: a fiscal year
 `FY2024-25`, and a job level must be 1–5.
 
 **Q: What happens if two people onboard someone at the same moment?**
-Both procedures compute the same next code, the UNIQUE key refuses the second insert, and the
-second user sees "This employee code already exists — please try again". Nothing is half-written,
-because the whole hire is one transaction.
+Both procedures compute the same next code, and the UNIQUE key refuses the second insert. That
+hire is rolled back as a whole, nothing half-written, and `run_with_retry()` runs it again with
+the next code (B19). Neither user sees an error, and a test simulates exactly this. A different
+duplicate, such as an e-mail address already in use, is reported at once, because retrying
+can't fix it.
+
+**Q: What if many people use the dashboard at once?**
+They share the pool of five connections. When all five are busy, a request waits up to ten
+seconds for one to be returned (B18), and repeated dashboard queries are served from the
+analytics cache in milliseconds (§8.2). A test holds every connection, releases one after half a
+second, and checks that the waiting request then succeeds.
+
+**Q: Why is the database setup a class too?**
+So that no part of the application connects to MySQL outside the `DatabaseConnection` Singleton,
+and so the setup logic is testable. `SchemaManager` installs the scripts, and its guard against
+dropping loaded tables is tested without ever executing a script (B20).
+`scripts/setup_database.py` and `scripts/run_etl.py` only read the command-line options and
+print progress.
 
 **Q: Why don't new reviews and projects appear on the dashboard immediately?**
 Decision B5. A warehouse is loaded in batches, and the fact load takes about 50 s, too long to

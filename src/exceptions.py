@@ -18,6 +18,8 @@ from __future__ import annotations
 class HRAppError(Exception):
     """Base class for every error raised by this application."""
 
+    constraint: str | None = None          # the database constraint behind the error, when known
+
 
 class ConfigurationError(HRAppError):
     """A required setting (e.g. database credentials) is missing or invalid."""

@@ -9,150 +9,25 @@ Usage:
     python scripts/setup_database.py --only 03 07 08   # (re)install views and procedures only
 
 Safety: the DDL scripts drop and recreate tables. If any selected script drops tables and a
-table listed in PROTECTED_TABLES already contains rows, the script stops unless --force is
-given. View and procedure scripts never drop tables, so they can be re-run at any time.
+loaded business table already contains rows, the script stops unless --force is given. View and
+procedure scripts never drop tables, so they can be re-run at any time. The work is done by
+SchemaManager (src/dal/schema_manager.py); this script only reads the options and prints progress.
 """
 from __future__ import annotations
 
 import argparse
-import os
-import re
 import sys
 import time
 from pathlib import Path
 
-import mysql.connector
-from dotenv import load_dotenv
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-ROOT = Path(__file__).resolve().parents[1]
-SQL_DIR = ROOT / "sql"
-
-# Tables holding loaded business data. Reference/lookup tables are not listed:
-# rebuilding them is always safe because the scripts repopulate them.
-PROTECTED_TABLES = [
-    ("hr_staging", "stg_employees"),
-    ("hr_oltp", "employees"),
-    ("hr_oltp", "projects"),
-    ("hr_dw", "dim_employee"),
-    ("hr_dw", "fact_performance_reviews"),
-]
+from src.dal.schema_manager import SchemaManager, SqlScript  # noqa: E402
+from src.exceptions import HRAppError  # noqa: E402
 
 
-def split_sql(script: str) -> list[str]:
-    """Split a SQL script into statements.
-
-    Honours quoted strings, -- / # / /* */ comments, and the client-side
-    DELIMITER directive used around stored-procedure bodies. Comments stay in the
-    statement text, so stored procedures keep their comments on the server; a chunk
-    that contains only comments is not a statement.
-    """
-    statements: list[str] = []
-    buf: list[str] = []
-    has_code = False
-    delimiter = ";"
-    quote: str | None = None
-    i, n = 0, len(script)
-
-    while i < n:
-        ch = script[i]
-
-        if quote:                                   # inside a quoted string / identifier
-            buf.append(ch)
-            if ch == "\\" and quote != "`" and i + 1 < n:
-                buf.append(script[i + 1])
-                i += 2
-                continue
-            if ch == quote:
-                quote = None
-            i += 1
-            continue
-
-        line_start = script.rfind("\n", 0, i) + 1
-        if not script[line_start:i].strip() and script[i:i + 9].upper() == "DELIMITER" \
-                and i + 9 < n and script[i + 9] in " \t":
-            end = script.find("\n", i)
-            end = n if end == -1 else end
-            delimiter = script[i + 9:end].strip()
-            i = end + 1
-            continue
-
-        if script.startswith("--", i) and (i + 2 >= n or script[i + 2] in " \t\r\n") or ch == "#":
-            end = script.find("\n", i)
-            end = n if end == -1 else end + 1
-            buf.append(script[i:end])
-            i = end
-            continue
-        if script.startswith("/*", i):
-            end = script.find("*/", i + 2)
-            end = n if end == -1 else end + 2
-            buf.append(script[i:end])
-            i = end
-            continue
-        if ch in ("'", '"', "`"):
-            quote = ch
-            buf.append(ch)
-            has_code = True
-            i += 1
-            continue
-        if script.startswith(delimiter, i):
-            if has_code:
-                statements.append("".join(buf).strip())
-            buf, has_code = [], False
-            i += len(delimiter)
-            continue
-
-        buf.append(ch)
-        has_code = has_code or not ch.isspace()
-        i += 1
-
-    if has_code:
-        statements.append("".join(buf).strip())
-    return statements
-
-
-def first_code_line(statement: str) -> str:
-    """The first line of a statement that is not a comment (for error messages)."""
-    for line in statement.splitlines():
-        if line.strip() and not line.lstrip().startswith(("--", "#", "/*")):
-            return line.strip()
-    return statement.strip().splitlines()[0]
-
-
-def drops_tables(script: str) -> bool:
-    """True if the script drops tables (the view and procedure scripts do not)."""
-    return re.search(r"\bDROP\s+TABLE\b", script, re.IGNORECASE) is not None
-
-
-def connect():
-    load_dotenv(ROOT / ".env")
-    try:
-        return mysql.connector.connect(
-            host=os.environ["DB_HOST"],
-            port=int(os.getenv("DB_PORT", "3306")),
-            user=os.environ["DB_USER"],
-            password=os.environ["DB_PASSWORD"],
-            autocommit=True,
-        )
-    except KeyError as missing:
-        sys.exit(f"Missing setting {missing} in .env (see .env.example).")
-    except mysql.connector.Error as err:
-        sys.exit(f"Could not connect to MySQL: {err}")
-
-
-def loaded_tables(cur) -> list[str]:
-    """Return the protected tables that exist and contain at least one row."""
-    found = []
-    for schema, table in PROTECTED_TABLES:
-        cur.execute(
-            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = %s AND table_name = %s",
-            (schema, table),
-        )
-        if not cur.fetchone()[0]:
-            continue
-        cur.execute(f"SELECT EXISTS (SELECT 1 FROM `{schema}`.`{table}`)")
-        if cur.fetchone()[0]:
-            found.append(f"{schema}.{table}")
-    return found
+def print_progress(script: SqlScript, statements: int, seconds: float) -> None:
+    print(f"  OK  {script.name:<32} {statements:>3} statements  {seconds:5.2f}s")
 
 
 def main() -> None:
@@ -162,42 +37,16 @@ def main() -> None:
                         help="run only the scripts with these number prefixes, e.g. --only 07 08")
     args = parser.parse_args()
 
-    files = sorted(SQL_DIR.glob("[0-9][0-9]_*.sql"))
-    if args.only:
-        files = [f for f in files if f.name[:2] in args.only]
-    if not files:
-        sys.exit(f"No matching numbered .sql files found in {SQL_DIR}")
-    scripts = {path: path.read_text(encoding="utf-8") for path in files}
-
-    conn = connect()
-    cur = conn.cursor()
-    cur.execute("SELECT VERSION(), CURRENT_USER()")
-    version, user = cur.fetchone()
-    print(f"Connected to MySQL {version} as {user}")
-
-    if any(drops_tables(text) for text in scripts.values()):
-        data = loaded_tables(cur)
-        if data and not args.force:
-            sys.exit("Refusing to rebuild: these tables contain data -> " + ", ".join(data)
-                     + "\nRe-run with --force if you really want to drop and recreate them.")
-
-    total = 0
     started = time.perf_counter()
-    for path, text in scripts.items():
-        statements = split_sql(text)
-        t0 = time.perf_counter()
-        for stmt in statements:
-            try:
-                cur.execute(stmt)
-                if cur.with_rows:
-                    cur.fetchall()
-            except mysql.connector.Error as err:
-                sys.exit(f"\nFAILED in {path.name}\n  statement: {first_code_line(stmt)[:100]} ...\n  error: {err}")
-        total += len(statements)
-        print(f"  OK  {path.name:<32} {len(statements):>3} statements  {time.perf_counter() - t0:5.2f}s")
-
-    print(f"Done: {len(files)} files, {total} statements in {time.perf_counter() - started:.2f}s")
-    conn.close()
+    try:
+        schema = SchemaManager()
+        scripts = schema.scripts(args.only)
+        version, user = schema.server()
+        print(f"Connected to MySQL {version} as {user}")
+        total = schema.install(scripts, force=args.force, progress=print_progress)
+    except HRAppError as err:
+        sys.exit(f"\n{err}")
+    print(f"Done: {len(scripts)} files, {total} statements in {time.perf_counter() - started:.2f}s")
 
 
 if __name__ == "__main__":
