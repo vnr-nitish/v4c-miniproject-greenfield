@@ -1,4 +1,4 @@
-"""Employee 360: profile, 3D career path, and the job change that triggers SCD Type 2 in the warehouse."""
+"""Employee 360: profile, career timeline, and the job change that triggers SCD Type 2 in the warehouse."""
 from datetime import date
 
 import streamlit as st
@@ -9,7 +9,7 @@ from src.ui import charts
 from src.ui.common import attempt, editor_unlocked, page_header
 from src.ui.forms import position_picker
 
-page_header("Employee 360", "Profile, career path and job changes — a department change creates a new SCD Type 2 "
+page_header("Employee 360", "Profile, career timeline and job changes — a department change creates a new SCD Type 2 "
                             "version in the warehouse")
 em = EmployeeManager()
 examples = attempt(lambda: em.example_codes(6)) or []
@@ -36,9 +36,9 @@ m[2].metric("Monthly income", f"{profile['monthly_income']:,.0f}")
 m[3].metric("Tenure", f"{employee.tenure_on(date.today())} years")
 m[4].metric("SCD2 versions", len(history))
 
-tab_path, tab_change, tab_more = st.tabs(["Career path (3D)", "Change position", "Reviews · projects · exit"])
+tab_path, tab_change, tab_more = st.tabs(["Career timeline", "Change position", "Reviews · projects · exit"])
 with tab_path:
-    st.plotly_chart(charts.career_path(history, highlight_last=bool(st.session_state.get("e360_changed"))),
+    st.plotly_chart(charts.career_timeline(history),
                     width="stretch")
     st.dataframe(history, hide_index=True, width="stretch")
 
@@ -64,7 +64,7 @@ with tab_change:
                 with cur:
                     st.markdown("<div class='scd-new'><b>New current version</b></div>", unsafe_allow_html=True)
                     st.dataframe(change.new_version[cols].to_frame(), width="stretch")
-                st.plotly_chart(charts.career_path(change.versions, highlight_last=True), width="stretch")
+                st.plotly_chart(charts.career_timeline(change.versions), width="stretch")
     elif not employee.is_active:
         st.info("This employee has left; their history is kept but can no longer change.")
 

@@ -1,43 +1,53 @@
-"""The app's look: page CSS (glass cards, tilt tiles) and a matching Plotly template."""
+"""The app's look: page CSS (cards, coloured tiles) and a matching Plotly template.
+
+Colours carry meaning everywhere: each department has its own colour, risk bands go from green
+(low) to red (very high), heatmaps use one sequential scale.
+"""
 from __future__ import annotations
 
 import plotly.graph_objects as go
 import plotly.io as pio
 import streamlit as st
 
-ACCENT = "#8B7CFF"
-PALETTE = ["#8B7CFF", "#2DD4BF", "#F472B6", "#FBBF24", "#60A5FA", "#A3E635", "#FB923C"]
-BAND_COLORS = {"Low": "#2DD4BF", "Medium": "#60A5FA", "High": "#FBBF24", "Very high": "#F43F5E"}
-TEXT, MUTED, GRID = "#E6E9F5", "#9AA3BF", "rgba(154,163,191,0.18)"
+PALETTE = ["#6366F1", "#14B8A6", "#F59E0B", "#EC4899", "#3B82F6", "#84CC16", "#F97316"]
+DEPARTMENT_COLORS = {"Human Resources": "#EC4899", "Research & Development": "#6366F1", "Sales": "#14B8A6"}
+BAND_COLORS = {"Low": "#22C55E", "Medium": "#3B82F6", "High": "#F59E0B", "Very high": "#EF4444"}
+PRIORITY_COLORS = {"Low": "#22C55E", "Medium": "#3B82F6", "High": "#F59E0B", "Critical": "#EF4444"}
+RISK_SCALE = ["#22C55E", "#FACC15", "#F97316", "#EF4444"]
+SEQ_SCALE = ["#1E293B", "#3B82F6", "#14B8A6", "#FACC15"]
+TILE_COLORS = ["#6366F1", "#14B8A6", "#F59E0B", "#EC4899", "#3B82F6", "#84CC16", "#F97316"]
+TEXT, MUTED, GRID = "#E5E7EB", "#94A3B8", "rgba(148,163,184,0.16)"
 
 CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap');
-html, body, [class*="css"], .stMarkdown, .stText { font-family: 'Space Grotesk', sans-serif; }
-.stApp { background: radial-gradient(1200px 600px at 10% -10%, #1d1b4b 0%, transparent 60%),
-                     radial-gradient(900px 500px at 110% 10%, #0f3d3e 0%, transparent 55%), #0A0E1A; }
-.hero { padding: 1.1rem 1.4rem; border-radius: 18px; margin-bottom: 1rem;
-        background: linear-gradient(120deg, rgba(139,124,255,.22), rgba(45,212,191,.10));
-        border: 1px solid rgba(139,124,255,.35); }
-.hero h1 { margin: 0; font-size: 1.9rem; background: linear-gradient(90deg, #C4B5FD, #5EEAD4);
-           -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-.hero p { margin: .3rem 0 0; color: #9AA3BF; }
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: .8rem; margin: .4rem 0 1rem; }
-.tile { perspective: 600px; }
-.tile-inner { padding: .9rem 1rem; border-radius: 16px; background: rgba(20,27,45,.72);
-              border: 1px solid rgba(154,163,191,.18); backdrop-filter: blur(8px);
-              transition: transform .35s ease, box-shadow .35s ease; transform-style: preserve-3d; }
-.tile:hover .tile-inner { transform: rotateX(8deg) rotateY(-8deg) translateZ(6px);
-                          box-shadow: 0 18px 40px rgba(139,124,255,.25); }
-.tile .label { color: #9AA3BF; font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; }
-.tile .value { font-size: 1.7rem; font-weight: 700; color: #E6E9F5; }
-.tile .delta-up { color: #2DD4BF; font-size: .85rem; } .tile .delta-down { color: #F43F5E; font-size: .85rem; }
-.tile .delta-flat { color: #9AA3BF; font-size: .85rem; }
-.note { padding: .7rem 1rem; border-left: 3px solid #8B7CFF; background: rgba(139,124,255,.08);
-        border-radius: 8px; color: #C9CEE0; font-size: .9rem; margin: .5rem 0 1rem; }
-.scd-old { border: 1px solid #F43F5E; border-radius: 12px; padding: .7rem 1rem; background: rgba(244,63,94,.07); }
-.scd-new { border: 1px solid #2DD4BF; border-radius: 12px; padding: .7rem 1rem; background: rgba(45,212,191,.07); }
-div[data-testid="stForm"] { border-radius: 16px; border-color: rgba(154,163,191,.22); background: rgba(20,27,45,.45); }
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
+html, body, [class*="css"], .stMarkdown { font-family: 'Plus Jakarta Sans', sans-serif; }
+.stApp { background: #0B1220; }
+.block-container { padding-top: 2rem; max-width: 1400px; }
+.hero { padding: 1.6rem 1.8rem; border-radius: 20px; margin-bottom: 1.2rem; position: relative; overflow: hidden;
+        background: linear-gradient(115deg, #312E81 0%, #0F766E 55%, #B45309 120%); }
+.hero h1 { margin: 0; font-size: 2rem; font-weight: 800; color: #fff; }
+.hero p { margin: .35rem 0 0; color: rgba(255,255,255,.82); font-size: 1rem; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); gap: .9rem; margin: .2rem 0 1.2rem; }
+.tile { padding: 1rem 1.1rem; border-radius: 16px; background: #111A2E; border: 1px solid rgba(148,163,184,.14);
+        border-top: 4px solid var(--c); transition: transform .2s ease, box-shadow .2s ease; }
+.tile:hover { transform: translateY(-3px); box-shadow: 0 12px 28px rgba(0,0,0,.35); }
+.tile .label { color: #94A3B8; font-size: .75rem; text-transform: uppercase; letter-spacing: .07em; font-weight: 600; }
+.tile .value { font-size: 1.75rem; font-weight: 800; color: #F8FAFC; margin-top: .15rem; }
+.delta-up { color: #22C55E; font-size: .82rem; } .delta-down { color: #EF4444; font-size: .82rem; }
+.delta-flat { color: #94A3B8; font-size: .82rem; }
+.note { padding: .75rem 1rem; border-left: 4px solid #14B8A6; background: rgba(20,184,166,.08);
+        border-radius: 10px; color: #CBD5E1; font-size: .9rem; margin: .6rem 0 1.1rem; }
+.medals { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: .9rem; margin-bottom: 1rem; }
+.medal { padding: 1rem 1.1rem; border-radius: 16px; background: #111A2E; border: 1px solid rgba(148,163,184,.14);
+         border-left: 5px solid var(--c); }
+.medal h4 { margin: 0 0 .5rem; color: var(--c); }
+.medal div { margin: .25rem 0; color: #E5E7EB; } .medal small { color: #94A3B8; }
+.scd-old { border: 1px solid #EF4444; border-radius: 12px; padding: .6rem 1rem; background: rgba(239,68,68,.08); }
+.scd-new { border: 1px solid #22C55E; border-radius: 12px; padding: .6rem 1rem; background: rgba(34,197,94,.08); }
+div[data-testid="stForm"] { border-radius: 16px; border-color: rgba(148,163,184,.2); background: #0F172A; }
+div[data-testid="stMetric"] { background: #111A2E; border-radius: 14px; padding: .6rem .9rem;
+                              border: 1px solid rgba(148,163,184,.14); }
 </style>
 """
 
@@ -48,15 +58,12 @@ def inject_css() -> None:
 
 def _register_template() -> None:
     axis = dict(gridcolor=GRID, zerolinecolor=GRID, linecolor=GRID, color=MUTED)
-    scene_axis = dict(backgroundcolor="rgba(0,0,0,0)", gridcolor=GRID, zerolinecolor=GRID, color=MUTED,
-                      showbackground=True)
     pio.templates["hr_dark"] = go.layout.Template(layout=dict(
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", colorway=PALETTE,
-        font=dict(family="Space Grotesk, sans-serif", color=TEXT), xaxis=axis, yaxis=axis,
-        scene=dict(xaxis=scene_axis, yaxis=scene_axis, zaxis=scene_axis),
-        legend=dict(bgcolor="rgba(0,0,0,0)"), margin=dict(l=10, r=10, t=40, b=10),
-        hoverlabel=dict(bgcolor="#141B2D", bordercolor=ACCENT, font=dict(color=TEXT))))
-    pio.templates.default = "hr_dark"
+        paper_bgcolor="#111A2E", plot_bgcolor="#111A2E", colorway=PALETTE,
+        font=dict(family="Plus Jakarta Sans, sans-serif", color=TEXT), xaxis=axis, yaxis=axis,
+        legend=dict(bgcolor="rgba(0,0,0,0)", orientation="h", y=-0.15), margin=dict(l=16, r=16, t=56, b=16),
+        hoverlabel=dict(bgcolor="#0B1220", bordercolor="#14B8A6", font=dict(color=TEXT))))
+    pio.templates.default = "plotly_dark+hr_dark"
 
 
 _register_template()

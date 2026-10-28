@@ -75,9 +75,26 @@ python scripts/run_etl.py --migrate --full-reload  # rebuild OLTP and warehouse 
 streamlit run app.py
 ```
 Data entry (onboarding, Employee 360 job changes with SCD Type 2, projects, reviews), warehouse
-dashboards with interactive 3D views (Workforce Galaxy, trend surface, top-performer podium, risk
-terrain, project pressure cube, career path) and an ETL page. Set `APP_PASSCODE` to protect data
+dashboards (treemap, risk heatmap, YoY trends, DENSE_RANK leaderboard, project bubbles, career
+timeline) and an ETL page. Set `APP_PASSCODE` to protect data
 entry on a public deployment. Design: [`docs/ui_design.md`](docs/ui_design.md).
+
+## Deploy (Streamlit Community Cloud + Aiven MySQL)
+1. **Cloud database:** a free [Aiven for MySQL](https://console.aiven.io/signup) service (real MySQL 8 — the
+   stored procedures need it). In *Advanced configuration* set `mysql.sql_require_primary_key = off`.
+2. **Load it from a laptop:** put the Aiven host, port, user and password in `.env`, then run the same three
+   commands as locally: `python scripts/setup_database.py`, `python -m src.synthesizer.run`,
+   `python scripts/run_etl.py --migrate`.
+3. **App:** [share.streamlit.io](https://share.streamlit.io) → *Create app* → this repository, branch `main`,
+   file `app.py`, Python 3.11 → *Advanced settings → Secrets*:
+   ```toml
+   DB_HOST = "mysql-xxxxxxxx.aivencloud.com"
+   DB_PORT = "12345"
+   DB_USER = "avnadmin"
+   DB_PASSWORD = "…"
+   APP_PASSCODE = "…"        # unlocks data entry; dashboards stay public
+   ```
+   Root-level secrets become environment variables, which `DatabaseSettings.from_env()` reads — no code change.
 
 ## Python backend
 Validated entity classes and one manager per area, all sharing a Singleton connection pool:

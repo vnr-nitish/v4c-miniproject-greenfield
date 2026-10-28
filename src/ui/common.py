@@ -9,7 +9,7 @@ import streamlit as st
 
 from src.dal import AnalyticsFilter
 from src.exceptions import BusinessRuleError, HRAppError, NotFoundError, ValidationError
-from src.ui.theme import inject_css
+from src.ui.theme import TILE_COLORS, inject_css
 
 
 def page_header(title: str, subtitle: str) -> None:
@@ -24,15 +24,16 @@ def note(text: str) -> None:
 def tiles(items: list[tuple[str, str, float | None, bool]]) -> None:
     """KPI tiles: (label, value, change, higher_is_good)."""
     html = []
-    for label, value, change, good_up in items:
+    for n, (label, value, change, good_up) in enumerate(items):
         delta = ""
         if change is not None and change == change:            # not NaN
             css = "delta-flat" if abs(change) < 1e-9 else (
                 "delta-up" if (change > 0) == good_up else "delta-down")
             arrow = "▲" if change > 0 else ("▼" if change < 0 else "■")
             delta = f"<div class='{css}'>{arrow} {change:+,.3g} vs previous year</div>"
-        html.append(f"<div class='tile'><div class='tile-inner'><div class='label'>{label}</div>"
-                    f"<div class='value'>{value}</div>{delta}</div></div>")
+        color = TILE_COLORS[n % len(TILE_COLORS)]
+        html.append(f"<div class='tile' style='--c:{color}'><div class='label'>{label}</div>"
+                    f"<div class='value'>{value}</div>{delta}</div>")
     st.markdown(f"<div class='tiles'>{''.join(html)}</div>", unsafe_allow_html=True)
 
 

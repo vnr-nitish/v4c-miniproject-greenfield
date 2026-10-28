@@ -628,3 +628,21 @@ manager methods (`AnalyticsManager.role_trends`, `EmployeeManager.example_codes`
 three filters, invalid onboarding shows field messages (12 tests); the server starts and answers.
 One fix on the way: pandas 3 drops the grouping column in `groupby().apply()`, so the stratified
 sample uses `groupby().sample()`.
+
+## Step 23 — Team review of the UI: 2D charts and colour that carries meaning
+
+The team found the first version's 3D views (galaxy, surfaces, podium, cube) hard to read and hard to
+explain when asked about the code, and the single purple accent monotonous. **Redesign** (ui_design.md
+U8): every 3D view replaced by a 2D chart that answers one question — headcount treemap coloured by
+risk + risk-band donut (overview), job-role heatmap (trends), medal cards + leaderboard (top
+performers), risk heatmap job level × tenure (attrition), bubble chart (bottlenecks), career timeline
+(Employee 360). Colours now mean something: one colour per department everywhere, risk bands green →
+red, priorities likewise, a different accent per headline tile; new font and gradient header. The
+chart module is now mostly short `plotly.express` calls.
+
+## Step 24 — Phase 5: cloud database (Aiven for MySQL)
+
+A free Aiven for MySQL 8.4 service; `sql_require_primary_key` off. Loaded from the laptop with the
+project's own commands, only `.env` pointing to Aiven: `setup_database.py` (112 statements, 25 s),
+`python -m src.synthesizer.run` (1.85 M rows uploaded, 0 rule violations), `run_etl.py --migrate`.
+`.env` now always overrides stale shell variables (a stale terminal variable had blocked the local app).

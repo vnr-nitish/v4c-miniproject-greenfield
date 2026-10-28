@@ -1,12 +1,13 @@
-"""Command centre: headline numbers and the 3D Workforce Galaxy."""
+"""Command centre: headline numbers, where the people are, and how risk is spread."""
 import streamlit as st
 
 from src.dal import AnalyticsManager
-from src.ui import charts
+from src.ui import charts, theme
 from src.ui.common import attempt, current_filters, note, page_header, tiles
 
 page_header("HR Analytics Command Centre",
-            "100,000 employees · 7 review cycles · live OLTP forms and a star-schema warehouse with SCD Type 2 history")
+            "100,000 employees · 7 review cycles · live forms on the OLTP database and dashboards on the "
+            "star-schema warehouse with SCD Type 2 history")
 am = AnalyticsManager()
 filters = current_filters()
 
@@ -25,14 +26,19 @@ if overview:
         ("Overdue projects", f"{overview['overdue_projects']:,}", None, False),
     ])
 
-st.subheader("Workforce Galaxy")
-st.caption("Every point is an active employee — tenure × monthly pay × attrition-risk score. Drag to rotate, "
-           "scroll to zoom, hover for the person and the factors behind their score.")
 with st.spinner("Scoring the workforce (first visit after a data change takes ~20 s)…"):
     workforce = attempt(am.scored_workforce)
 if workforce is not None:
-    selected = filters.select(workforce)
-    sample = selected.groupby("risk_band").sample(frac=min(1.0, 6000 / max(len(selected), 1)), random_state=42)
-    st.plotly_chart(charts.workforce_galaxy(sample), width="stretch")
-    note(f"Showing a stratified sample of {len(sample):,} of {len(selected):,} employees (same sample for "
-         "every visitor) — enough to see the structure without sending 84,000 points to the browser.")
+    scope = filters.select(workforce)
+    left, right = st.columns([2, 1])
+    left.plotly_chart(charts.headcount_treemap(scope), width="stretch")
+    bands = scope.groupby("risk_band", as_index=False).size().rename(columns={"size": "employees"})
+    bands = bands.set_index("risk_band").reindex(list(theme.BAND_COLORS)).dropna().reset_index()
+    right.plotly_chart(charts.donut(bands, "risk_band", "employees", theme.BAND_COLORS,
+                                    "Attrition-risk bands"), width="stretch")
+    per_dept = scope.groupby("department_name", as_index=False).agg(
+        employees=("employee_id", "size"), avg_income=("monthly_income", "mean"))
+    right.plotly_chart(charts.bars(per_dept, "department_name", "employees", "department_name",
+                                   title="Headcount by department", text="employees"), width="stretch")
+    note("Click a tile of the treemap to zoom into a department; the colour shows where high attrition risk "
+         "is concentrated. Every chart follows the filters in the sidebar.")

@@ -1,4 +1,4 @@
-"""Project bottlenecks: 3D pressure cube of overdue projects and delivery-delay analysis."""
+"""Project bottlenecks: bubble chart of overdue projects and delivery-delay analysis."""
 import streamlit as st
 
 from src.dal import AnalyticsManager
@@ -10,10 +10,10 @@ am, filters = AnalyticsManager(), current_filters()
 
 overdue = attempt(lambda: am.bottleneck_projects(filters, limit=500))
 if overdue is not None and len(overdue):
-    st.subheader(f"Pressure cube · {len(overdue)} overdue projects")
-    st.plotly_chart(charts.pressure_cube(overdue), width="stretch")
-    note("Further right = later, higher = more overtime in the reviewed team, deeper = bigger budget; "
-         "bubble size = reviewed team members.")
+    st.subheader(f"{len(overdue)} overdue projects")
+    st.plotly_chart(charts.bubbles(overdue), width="stretch")
+    note("Top right = the real bottlenecks: long overdue <i>and</i> a team working a lot of overtime. "
+         "Bubble size = budget, colour = priority.")
     st.dataframe(overdue, hide_index=True, width="stretch",
                  column_config={"days_overdue": st.column_config.ProgressColumn(
                      "Days overdue", min_value=0, max_value=int(overdue.days_overdue.max()), format="%d")})

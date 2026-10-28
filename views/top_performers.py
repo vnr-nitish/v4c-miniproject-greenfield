@@ -1,8 +1,8 @@
-"""Top performers by department — DENSE_RANK() in SQL, shown as a 3D podium and a leaderboard."""
+"""Top performers by department — DENSE_RANK() in SQL, shown as medal cards and a leaderboard."""
 import streamlit as st
 
 from src.dal import AnalyticsFilter, AnalyticsManager
-from src.ui import charts
+from src.ui import charts, theme
 from src.ui.common import attempt, current_filters, note, page_header
 
 page_header("Top performers", "Ranked per department with DENSE_RANK() — equal results share a rank")
@@ -18,8 +18,18 @@ active_only = c4.toggle("Current staff only", value=True)
 filters = AnalyticsFilter(base.departments, base.job_levels, tuple(chosen))
 top = attempt(lambda: am.top_performers(filters, top_n=top_n, min_reviews=min_reviews, active_only=active_only))
 if top is not None and len(top):
-    st.plotly_chart(charts.podium(top), width="stretch")
-    st.caption("Drag to rotate the podium. * = rank shared with others (hover for the count).")
+    medals, icons = [], {1: "🥇", 2: "🥈", 3: "🥉"}
+    for department, rows in top.groupby("department_name", sort=True):
+        color = theme.DEPARTMENT_COLORS.get(department, "#6366F1")
+        lines = "".join(
+            f"<div>{icons[rank]} <b>{group.iloc[0].full_name}</b>"
+            f"{f' <small>+{len(group) - 1} tied</small>' if len(group) > 1 else ''}"
+            f"<br><small>KPI {group.iloc[0].avg_kpi:.2f} · rating {group.iloc[0].avg_rating:.2f} · "
+            f"{group.iloc[0].current_role}</small></div>"
+            for rank, group in rows.groupby("department_rank") if rank <= 3)
+        medals.append(f"<div class='medal' style='--c:{color}'><h4>{department}</h4>{lines}</div>")
+    st.markdown(f"<div class='medals'>{''.join(medals)}</div>", unsafe_allow_html=True)
+    st.plotly_chart(charts.leaderboard(top), width="stretch")
     department = st.segmented_control("Leaderboard", sorted(top.department_name.unique()),
                                       default=sorted(top.department_name.unique())[0])
     board = top[top.department_name == department] if department else top

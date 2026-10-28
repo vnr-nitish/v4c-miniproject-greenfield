@@ -1,4 +1,4 @@
-"""Year-over-year performance trends (LAG over review cycles) with a 3D trend surface."""
+"""Year-over-year performance trends (LAG over review cycles) with a job-role heatmap."""
 import streamlit as st
 
 from src.dal import AnalyticsManager
@@ -30,14 +30,14 @@ if trend is not None and len(trend):
         st.dataframe(trend, hide_index=True, width="stretch")
     note("Ratings and KPI are steady across cycles by design: every year of the generated history follows the "
          "IBM snapshot (synthesizer D26), so no trend was invented. Real movement shows up in overtime, by job role "
-         "and in attrition — explore it in the surface below.")
+         "and in attrition — explore it in the heatmap below.")
 
-st.subheader("Trend surface · job role × review cycle")
+st.subheader("Heatmap · job role × review cycle")
 SURFACE = {"overtime_pct": "Overtime (%)", "kpi": "Average KPI", "outstanding_pct": "Outstanding (%)",
            "job_satisfaction": "Job satisfaction", "training_sessions": "Training sessions"}
-surface_metric = st.pills("Surface metric", list(SURFACE), format_func=SURFACE.get, default="overtime_pct") \
+surface_metric = st.pills("Heatmap metric", list(SURFACE), format_func=SURFACE.get, default="overtime_pct") \
     or "overtime_pct"
 roles = attempt(lambda: am.role_trends(filters, surface_metric))
 if roles is not None and len(roles):
     grid = roles.pivot(index="job_role", columns="period", values="value")
-    st.plotly_chart(charts.surface(grid, "Review cycle", "Job role", SURFACE[surface_metric]), width="stretch")
+    st.plotly_chart(charts.heatmap(grid, f"{SURFACE[surface_metric]} per job role and cycle"), width="stretch")
