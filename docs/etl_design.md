@@ -33,7 +33,7 @@ hr_staging ──(Stage 1: migration, once)──► hr_oltp ──(Stage 2: war
 |---|---|---|---|
 | 1 | `hr_oltp.sp_migrate_from_staging(p_full_reload, OUT batch)` | once (legacy migration) | yes |
 | 2 | `hr_dw.sp_run_etl(OUT batch)` | every run (nightly / "Run ETL" button) | yes |
-| app | `hr_oltp.sp_change_employee_position(…)` + `hr_dw.sp_scd2_apply_employee(emp, OUT batch)` | on every job change in the app | no — the app commits both together |
+| app | `hr_oltp.sp_change_employee_position(…)` / `sp_onboard_employee(…)` / `sp_record_exit(…)` + `hr_dw.sp_scd2_apply_employee(emp, OUT batch)` | on every hire, job change and exit in the app ([`backend_design.md`](backend_design.md) §6) | no — the app commits both together |
 
 Inside Stage 2, `sp_run_etl` calls the step procedures in dependency order — dimensions before the
 fact, so a review always finds its dimension rows:
@@ -173,6 +173,8 @@ version's start and not in the future; role exists in the department; level insi
 range; income inside the level's band; manager is another active employee; something actually
 changed. If no change reason is given it is derived with the synthesizer's priority: Promotion
 (level up) > Transfer (department) > Role Change > Manager Change > Salary Revision.
+Since Phase 3 the four position rules live in `sp_validate_position`, shared with onboarding
+([`backend_design.md`](backend_design.md) §6).
 
 ## 7. Logging and error handling
 

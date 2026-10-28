@@ -403,6 +403,9 @@ blindly to every dimension was evaluated and rejected. Three options were compar
 | Employee attrition risk | dim_employee (attrition_flag, tenure, level, income band) + latest fact row (satisfaction, overtime, rating) |
 | Project analysis (additional) | dim_project (delay_days, status, priority) × fact (kpi per project) |
 
+Implemented in Phase 3 as `AnalyticsManager` — queries, the attrition-risk score and its
+back-test, measured performance: [`backend_design.md`](backend_design.md) §8.
+
 ---
 
 ## 11. ETL outline (implemented in Phase 2 — see [`etl_design.md`](etl_design.md))

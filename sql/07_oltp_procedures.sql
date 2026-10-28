@@ -10,6 +10,9 @@
 -- sp_change_employee_position  Records a job change (department, role, level, manager, pay) as a
 --                              new effective-dated version. Used by the application; it does not
 --                              commit — the caller commits it together with the warehouse update.
+-- sp_validate_position         The position rules shared by onboarding and job changes.
+-- sp_onboard_employee          Hires a person: employee row + first job version (no commit).
+-- sp_record_exit               Records an exit and closes open assignments (no commit).
 --
 -- Safe to re-run: procedures are dropped and recreated; no table is touched.
 -- =============================================================================
@@ -18,6 +21,9 @@ USE hr_oltp;
 
 DROP PROCEDURE IF EXISTS sp_migrate_from_staging;
 DROP PROCEDURE IF EXISTS sp_change_employee_position;
+DROP PROCEDURE IF EXISTS sp_validate_position;
+DROP PROCEDURE IF EXISTS sp_onboard_employee;
+DROP PROCEDURE IF EXISTS sp_record_exit;
 
 DELIMITER $$
 
@@ -531,8 +537,7 @@ END$$
 -- p_effective_date (half-open periods, so its end = the new start) and a new open version is
 -- inserted. Business rules checked here, each with a readable error (SQLSTATE 45000):
 --   employee exists and is active; effective date after the current version's start and not
---   in the future; role exists in the department; level inside the role's range; income
---   inside the level's salary band; manager is another active employee; something changed.
+--   in the future; the position rules of sp_validate_position; something changed.
 -- p_change_reason NULL = derived (refinement E8): Promotion (level up) > Transfer (department)
 --   > Role Change > Manager Change > Salary Revision — the same priority the synthesizer used.
 -- Does NOT commit. The application calls it and then hr_dw.sp_scd2_apply_employee in the
@@ -581,29 +586,18 @@ BEGIN
         SET v_message = CONCAT('Employee ', p_employee_id, ' left on ', v_exit_date, ' and can no longer change jobs');
     ELSEIF p_effective_date IS NULL OR p_effective_date <= v_start OR p_effective_date > CURDATE() THEN
         SET v_message = CONCAT('Effective date must be after ', v_start, ' and not in the future');
-    ELSEIF NOT EXISTS (SELECT 1 FROM department_job_roles
-                       WHERE department_id = p_department_id AND job_role_id = p_job_role_id) THEN
-        SET v_message = 'This job role does not exist in the selected department';
-    ELSEIF NOT EXISTS (SELECT 1 FROM job_roles
-                       WHERE job_role_id = p_job_role_id
-                         AND p_job_level_id BETWEEN min_job_level_id AND max_job_level_id) THEN
-        SET v_message = 'Job level is outside the allowed range for this role';
-    ELSEIF NOT EXISTS (SELECT 1 FROM job_levels
-                       WHERE job_level_id = p_job_level_id
-                         AND p_monthly_income BETWEEN salary_band_min AND salary_band_max) THEN
-        SET v_message = 'Monthly income is outside the salary band of this job level';
-    ELSEIF p_manager_id IS NOT NULL
-       AND (p_manager_id = p_employee_id
-            OR NOT EXISTS (SELECT 1 FROM employees WHERE employee_id = p_manager_id AND exit_date IS NULL)) THEN
-        SET v_message = 'The manager must be another active employee';
-    ELSEIF p_department_id = v_department AND p_job_role_id = v_role AND p_job_level_id = v_level
-       AND p_manager_id <=> v_manager AND p_monthly_income = v_income
-       AND p_stock_option_level <=> v_stock AND p_business_travel <=> v_travel THEN
-        SET v_message = 'Nothing changed: the new position equals the current one';
     END IF;
-
     IF v_message IS NOT NULL THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = v_message;
+    END IF;
+
+    CALL sp_validate_position(p_employee_id, p_department_id, p_job_role_id, p_job_level_id,
+                              p_manager_id, p_monthly_income);
+
+    IF p_department_id = v_department AND p_job_role_id = v_role AND p_job_level_id = v_level
+       AND p_manager_id <=> v_manager AND p_monthly_income = v_income
+       AND p_stock_option_level <=> v_stock AND p_business_travel <=> v_travel THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Nothing changed: the new position equals the current one';
     END IF;
 
     SET p_change_reason = COALESCE(NULLIF(TRIM(p_change_reason), ''),
@@ -622,6 +616,165 @@ BEGIN
             p_monthly_income, p_stock_option_level, p_business_travel, p_change_reason,
             p_effective_date);
     SET p_history_id = LAST_INSERT_ID();
+END$$
+
+
+-- -----------------------------------------------------------------------------
+-- sp_validate_position: the business rules every job position must satisfy — shared by
+-- onboarding and job changes, so they are written once (decision B2). They need the reference
+-- tables, which is why they live in the database rather than in the Python entity classes.
+-- SIGNALs the first broken rule; returns nothing when the position is valid.
+-- p_employee_id is NULL for someone not hired yet.
+-- -----------------------------------------------------------------------------
+
+CREATE PROCEDURE sp_validate_position(
+    IN p_employee_id    INT UNSIGNED,
+    IN p_department_id  TINYINT UNSIGNED,
+    IN p_job_role_id    TINYINT UNSIGNED,
+    IN p_job_level_id   TINYINT UNSIGNED,
+    IN p_manager_id     INT UNSIGNED,
+    IN p_monthly_income DECIMAL(10,2))
+    COMMENT 'Position rules: role offered in department, level in role range, pay in band, active manager'
+BEGIN
+    DECLARE v_message VARCHAR(128);
+
+    IF NOT EXISTS (SELECT 1 FROM department_job_roles
+                   WHERE department_id = p_department_id AND job_role_id = p_job_role_id) THEN
+        SET v_message = 'This job role does not exist in the selected department';
+    ELSEIF NOT EXISTS (SELECT 1 FROM job_roles
+                       WHERE job_role_id = p_job_role_id
+                         AND p_job_level_id BETWEEN min_job_level_id AND max_job_level_id) THEN
+        SET v_message = 'Job level is outside the allowed range for this role';
+    ELSEIF NOT EXISTS (SELECT 1 FROM job_levels
+                       WHERE job_level_id = p_job_level_id
+                         AND p_monthly_income BETWEEN salary_band_min AND salary_band_max) THEN
+        SET v_message = 'Monthly income is outside the salary band of this job level';
+    ELSEIF p_manager_id IS NOT NULL
+       AND (p_manager_id <=> p_employee_id
+            OR NOT EXISTS (SELECT 1 FROM employees WHERE employee_id = p_manager_id AND exit_date IS NULL)) THEN
+        SET v_message = 'The manager must be another active employee';
+    END IF;
+
+    IF v_message IS NOT NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = v_message;
+    END IF;
+END$$
+
+
+-- -----------------------------------------------------------------------------
+-- sp_onboard_employee: hires a person — the employee row and their first job version
+-- ('Hire') in one call. The next employee code is generated here (EMP + 6 digits); the UNIQUE
+-- key on employee_code is the guard if two people are onboarded at the same moment.
+-- Does NOT commit: the application calls hr_dw.sp_scd2_apply_employee in the same transaction,
+-- so the new employee appears in the warehouse at once (dw_design.md 9.6: no late-arriving rows).
+-- -----------------------------------------------------------------------------
+
+CREATE PROCEDURE sp_onboard_employee(
+    IN  p_first_name             VARCHAR(50),
+    IN  p_last_name              VARCHAR(50),
+    IN  p_email                  VARCHAR(120),
+    IN  p_phone                  VARCHAR(20),
+    IN  p_gender                 VARCHAR(10),
+    IN  p_date_of_birth          DATE,
+    IN  p_marital_status         VARCHAR(10),
+    IN  p_education_level_id     TINYINT UNSIGNED,
+    IN  p_education_field_id     TINYINT UNSIGNED,
+    IN  p_distance_from_home_km  TINYINT UNSIGNED,
+    IN  p_prior_experience_years TINYINT UNSIGNED,
+    IN  p_prior_companies_count  TINYINT UNSIGNED,
+    IN  p_hire_date              DATE,
+    IN  p_department_id          TINYINT UNSIGNED,
+    IN  p_job_role_id            TINYINT UNSIGNED,
+    IN  p_job_level_id           TINYINT UNSIGNED,
+    IN  p_manager_id             INT UNSIGNED,
+    IN  p_monthly_income         DECIMAL(10,2),
+    IN  p_stock_option_level     TINYINT UNSIGNED,
+    IN  p_business_travel        VARCHAR(20),
+    OUT p_employee_id            INT UNSIGNED,
+    OUT p_employee_code          CHAR(9))
+    COMMENT 'Hire a person: employee row + first job version; the caller commits'
+BEGIN
+    IF p_hire_date IS NULL OR p_hire_date > CURDATE() THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'The hire date must be today or earlier';
+    END IF;
+
+    CALL sp_validate_position(NULL, p_department_id, p_job_role_id, p_job_level_id,
+                              p_manager_id, p_monthly_income);
+
+    -- codes are fixed-width, so the highest code is the last one in the unique index
+    SELECT CONCAT('EMP', LPAD(COALESCE(CAST(SUBSTRING(MAX(employee_code), 4) AS UNSIGNED), 0) + 1, 6, '0'))
+    INTO p_employee_code
+    FROM employees;
+
+    INSERT INTO employees (employee_code, first_name, last_name, email, phone, gender, date_of_birth,
+                           marital_status, education_level_id, education_field_id, distance_from_home_km,
+                           prior_experience_years, prior_companies_count, hire_date)
+    VALUES (p_employee_code, p_first_name, p_last_name, p_email, p_phone, p_gender, p_date_of_birth,
+            p_marital_status, p_education_level_id, p_education_field_id, p_distance_from_home_km,
+            p_prior_experience_years, p_prior_companies_count, p_hire_date);
+    SET p_employee_id = LAST_INSERT_ID();
+
+    INSERT INTO employee_job_history (employee_id, department_id, job_role_id, job_level_id, manager_id,
+                                      monthly_income, stock_option_level, business_travel, change_reason,
+                                      effective_start_date)
+    VALUES (p_employee_id, p_department_id, p_job_role_id, p_job_level_id, p_manager_id,
+            p_monthly_income, p_stock_option_level, p_business_travel, 'Hire', p_hire_date);
+END$$
+
+
+-- -----------------------------------------------------------------------------
+-- sp_record_exit: an employee leaves. Employees are never deleted (their history and reviews
+-- must stay reportable); leaving is recorded as an exit date and reason. Open project
+-- assignments end on the exit date, and assignments that would only have started later are
+-- removed. The latest job version stays open (the OLTP convention, 03_oltp_views.sql).
+-- Does NOT commit: the application applies the warehouse update in the same transaction.
+-- -----------------------------------------------------------------------------
+
+CREATE PROCEDURE sp_record_exit(
+    IN  p_employee_id        INT UNSIGNED,
+    IN  p_exit_date          DATE,
+    IN  p_exit_reason_id     TINYINT UNSIGNED,
+    OUT p_assignments_closed INT)
+    COMMENT 'Record an exit and close the open assignments; the caller commits'
+BEGIN
+    DECLARE v_found       INT UNSIGNED;
+    DECLARE v_exit_date   DATE;
+    DECLARE v_start       DATE;
+    DECLARE v_last_review DATE;
+    DECLARE v_message     VARCHAR(128);
+
+    SELECT e.employee_id, e.exit_date, h.effective_start_date
+    INTO v_found, v_exit_date, v_start
+    FROM employees e
+    JOIN employee_job_history h ON h.employee_id = e.employee_id AND h.effective_end_date IS NULL
+    WHERE e.employee_id = p_employee_id
+    FOR UPDATE;
+
+    SELECT MAX(review_date) INTO v_last_review FROM performance_reviews WHERE employee_id = p_employee_id;
+
+    IF v_found IS NULL THEN
+        SET v_message = CONCAT('Employee ', COALESCE(p_employee_id, 'NULL'), ' does not exist');
+    ELSEIF v_exit_date IS NOT NULL THEN
+        SET v_message = CONCAT('Employee ', p_employee_id, ' already left on ', v_exit_date);
+    ELSEIF p_exit_date IS NULL OR p_exit_date < v_start OR p_exit_date > CURDATE() THEN
+        SET v_message = CONCAT('Exit date must be on or after ', v_start, ' (the last job change) and not in the future');
+    ELSEIF p_exit_date < v_last_review THEN
+        SET v_message = CONCAT('Exit date cannot be before the employee''s last review (', v_last_review, ')');
+    ELSEIF NOT EXISTS (SELECT 1 FROM exit_reasons WHERE exit_reason_id = p_exit_reason_id) THEN
+        SET v_message = 'Choose a valid exit reason';
+    END IF;
+    IF v_message IS NOT NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = v_message;
+    END IF;
+
+    UPDATE employees SET exit_date = p_exit_date, exit_reason_id = p_exit_reason_id
+    WHERE employee_id = p_employee_id;
+
+    DELETE FROM project_assignments WHERE employee_id = p_employee_id AND start_date > p_exit_date;
+    SET p_assignments_closed = ROW_COUNT();
+    UPDATE project_assignments SET end_date = p_exit_date
+    WHERE employee_id = p_employee_id AND (end_date IS NULL OR end_date > p_exit_date);
+    SET p_assignments_closed = p_assignments_closed + ROW_COUNT();
 END$$
 
 DELIMITER ;

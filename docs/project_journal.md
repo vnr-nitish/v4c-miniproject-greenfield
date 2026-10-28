@@ -460,3 +460,78 @@ deliverables — all covered. Two questions were raised:
 Also noted: the diagram screenshots shared in this review were an older render — the `.drawio`
 files already contain the PR #3 updates (`year_month_label`, `current_version_key`, GEN markers).
 They will be re-rendered from the files at the final diagram check.
+
+## Step 18 — Phase 3: OOP backend plan (branch `feature/oop-backend`)
+
+PR #5 (`feature/etl-pipeline`) merged into `main`; new branch `feature/oop-backend`. The full
+Phase 3, 4 and 5 text of the problem statement and the evaluation criteria were provided, and the
+plan was checked against them word for word (requirement → class table in
+[`backend_design.md`](backend_design.md) §1).
+
+The plan: the layers (pages → managers → `DatabaseConnection` → MySQL, with entities passed
+between them); five entity classes; six managers, each inheriting from `DatabaseConnection`;
+business rules in three layers; MySQL errors translated into application errors; tests in a
+rolled-back session; the analytics queries for every Phase 4 dashboard.
+
+**All eight decisions approved as recommended** (full rationale: `backend_design.md` §11):
+
+| ID | Decision |
+|---|---|
+| B1 | Entities are frozen dataclasses on an abstract `Entity`, validated on creation |
+| B2 | Onboarding as `sp_onboard_employee`, sharing `sp_validate_position` with job changes |
+| B3 | Each manager inherits directly from `DatabaseConnection` |
+| B4 | Entities for single records, DataFrames for lists and analytics |
+| B5 | Employee changes reach the warehouse immediately; projects and reviews on the next ETL run |
+| B6 | Manager tests in one rolled-back session (savepoints per step) |
+| B7 | Analytics SQL parameterized in `AnalyticsManager`, not in views |
+| B8 | A rule-based, back-tested attrition-risk score instead of a machine-learning model |
+
+## Step 19 — Phase 3: OOP backend implementation
+
+**Built:**
+
+| File | Contents |
+|---|---|
+| `src/models/` | `Entity` (abstract base: construction-time validation, all errors at once, `from_row`, `to_record`, `with_changes`), `Employee`, `Position`, `Project`, `Assignment`, `Review` |
+| `src/exceptions.py` | `ValidationError` (per-field messages), `BusinessRuleError`, `DuplicateError`, `OverAllocationError`, `NotFoundError` |
+| `src/db_manager.py` | MySQL errors translated by (error number, constraint); `rollback_session()` with savepoints; `call_in()` / `frame_in()` for multi-step transactions; whole-number DECIMALs kept as integers |
+| `sql/07_oltp_procedures.sql` | `sp_validate_position` (shared rules), `sp_onboard_employee`, `sp_record_exit`; `sp_change_employee_position` now uses the shared rules |
+| `src/dal/` | `ReferenceDataManager`, `EmployeeManager` (`change_position()` returns the SCD2 step), `ProjectManager`, `ReviewManager`, `AnalyticsManager` (year-over-year, attrition trend, top performers, attrition risk, back-test, project bottlenecks; cached per warehouse version) |
+| `tests/test_models.py`, `tests/test_managers.py` | 68 tests without a database; 47 against the 100K data |
+| `docs/backend_design.md` | class diagram, OOP principles map, decisions, Q&A |
+
+**Checked against the data before relying on it:** all 1,377,237 OLTP rows were loaded into their
+entity classes. 153 surnames like "D’Alia" (typographic apostrophe) were rejected — the name rule
+was wrong, not the data; after the fix, 0 rejections (B15).
+
+**The attrition-risk score was measured, not assumed:** attrition within a year of each of
+379,838 reviews, per candidate factor. Marital status predicted attrition but is a protected
+personal characteristic, so it was excluded together with age and gender; the recalibrated
+score separates leavers *better* (Very high band 15.95 % against Low 0.86 %; the top two bands
+hold 21 % of employees and 58 % of leavers) (B9). Bands use fixed thresholds instead of the
+planned `NTILE` quartiles, which would have put equal scores in different bands (B10).
+
+**Performance work** (each step measured with `EXPLAIN ANALYZE`; `backend_design.md` §8.2):
+- The first versions took 5–36 s per query.
+- Fixed: a needless join removed (`yoy_trends` 5.2 → 2.4 s); a misestimated filter moved after
+  the aggregation (`top_performers` 7.9 → 4.9 s); one company-wide risk query instead of one
+  per view (B11); a cache keyed by the latest finished ETL batch (1–20 ms per repeated query)
+  (B12, B13).
+- Tried and rejected:
+  - A forced hash join (−1.8 s, brittle hints).
+  - A "packed MAX" (faster, less readable).
+  - A bigger buffer pool (it already serves 99.91 % of reads from memory).
+- Writes take 2–15 ms; a department change with its SCD Type 2 step takes 14 ms.
+
+**Found in the data (open for Phase 4):**
+- The latest review cycle, FY2025-26, carries the original IBM values: no ratings below 3, and
+  less overtime. The year-over-year chart will show a step there, which must be explained, not
+  presented as a trend.
+- In a single cycle, dozens of people share rank 1 (rating 4, KPI 100). Ranking over several
+  cycles separates them.
+- Attrition is reported per fiscal year, because the synthesized history ends on 2026-06-30
+  (B14).
+
+**Verified:** whole suite **197 / 197 pass** (82 earlier + 115 new, ≈ 5 minutes). After the run,
+every table count equals the loaded data — the rolled-back tests left nothing behind. No schema
+change, so both draw.io diagrams are unaffected.
