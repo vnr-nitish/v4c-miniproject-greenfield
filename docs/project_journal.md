@@ -609,3 +609,40 @@ functional programming"; three suggestions were proposed and **approved**:
 - New tests: a busy pool waits and then fails clearly; a taken code is retried while other
   duplicates are not; the guard stops a rebuild before anything runs.
 - Fingerprints of all 19 tables were taken before and after the suite: identical.
+## Step 22 — Phase 4: Streamlit UI (branch `feature/streamlit-dashboard`)
+
+**Plan approved as recommended** (U1–U7, `ui_design.md` §3): dark "command centre" theme, Plotly 3D
+for every 3D view, passcode-protected data entry on the public site, six 3D views each with a 2D
+companion, a sampled Workforce Galaxy, honest flat trends, background warm-up of the analytics cache.
+
+**Checked first:** Streamlit 1.66 and Plotly 7.1 provide navigation, dialogs, chart and table
+selection events and WebGL 3D traces — nothing beyond `streamlit` and `plotly` is needed, so the app
+deploys unchanged on Streamlit Community Cloud. The data was checked for each 3D view (e.g. the risk
+terrain: 49–56 % of entry-level staff in their first two years are High risk, against 3–7 % elsewhere).
+
+**Built:** `app.py`, ten pages in `views/`, `src/ui/` (theme, charts, forms, common helpers), two
+manager methods (`AnalyticsManager.role_trends`, `EmployeeManager.example_codes`), dark theme config,
+`docs/ui_design.md`; `docs/deferred_items.md` committed with this branch.
+
+**Verified:** `tests/test_app.py` — every page renders against the 100K data, the app shell shows the
+three filters, invalid onboarding shows field messages (12 tests); the server starts and answers.
+One fix on the way: pandas 3 drops the grouping column in `groupby().apply()`, so the stratified
+sample uses `groupby().sample()`.
+
+## Step 23 — Team review of the UI: 2D charts and colour that carries meaning
+
+The team found the first version's 3D views (galaxy, surfaces, podium, cube) hard to read and hard to
+explain when asked about the code, and the single purple accent monotonous. **Redesign** (ui_design.md
+U8): every 3D view replaced by a 2D chart that answers one question — headcount treemap coloured by
+risk + risk-band donut (overview), job-role heatmap (trends), medal cards + leaderboard (top
+performers), risk heatmap job level × tenure (attrition), bubble chart (bottlenecks), career timeline
+(Employee 360). Colours now mean something: one colour per department everywhere, risk bands green →
+red, priorities likewise, a different accent per headline tile; new font and gradient header. The
+chart module is now mostly short `plotly.express` calls.
+
+## Step 24 — Phase 5: cloud database (Aiven for MySQL)
+
+A free Aiven for MySQL 8.4 service; `sql_require_primary_key` off. Loaded from the laptop with the
+project's own commands, only `.env` pointing to Aiven: `setup_database.py` (112 statements, 25 s),
+`python -m src.synthesizer.run` (1.85 M rows uploaded, 0 rule violations), `run_etl.py --migrate`.
+`.env` now always overrides stale shell variables (a stale terminal variable had blocked the local app).

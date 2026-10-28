@@ -124,6 +124,13 @@ class EmployeeManager(DatabaseConnection):
             "ORDER BY employee_code LIMIT %(limit)s",
             {"text": text, "department": department_id, "active_only": active_only, "limit": limit})
 
+    def example_codes(self, limit: int = 8) -> list[str]:
+        """Active employees with the longest SCD Type 2 history — good examples for the 360 view."""
+        rows = self.fetch_all(
+            "SELECT employee_code FROM hr_dw.dim_employee WHERE is_current AND exit_date IS NULL "
+            "AND version_number >= 4 ORDER BY version_number DESC, employee_code LIMIT %s", (limit,))
+        return [row["employee_code"] for row in rows]
+
     def history(self, employee_id: int) -> pd.DataFrame:
         """The employee's SCD Type 2 versions in the warehouse, oldest first."""
         return self.fetch_frame(_HISTORY_SQL, (employee_id,))

@@ -13,8 +13,8 @@ Python 3.11 (OOP, pandas, Faker) · MySQL 8 · Streamlit · Plotly · draw.io ·
 
 ## Project structure
 ```
-├── app.py                # Streamlit entry point
-├── pages/                # Streamlit pages (data entry + dashboards)
+├── app.py                # Streamlit entry point (navigation, filters, warm-up)
+├── views/                # Streamlit pages (data entry + dashboards); src/ui/ holds theme and 3D charts
 ├── src/
 │   ├── db_manager.py     # Singleton DatabaseConnection (shared pool, transactions, error translation)
 │   ├── exceptions.py     # application exceptions (validation, business rules, not found, …)
@@ -70,6 +70,32 @@ python scripts/run_etl.py --migrate --full-reload  # rebuild OLTP and warehouse 
 [`sql/validation_queries.sql`](sql/validation_queries.sql) shows in MySQL Workbench that it worked
 (reconciliation, SCD Type 2 history, a rolled-back department change).
 
+## Run the web app
+```bash
+streamlit run app.py
+```
+Data entry (onboarding, Employee 360 job changes with SCD Type 2, projects, reviews), warehouse
+dashboards (treemap, risk heatmap, YoY trends, DENSE_RANK leaderboard, project bubbles, career
+timeline) and an ETL page. Set `APP_PASSCODE` to protect data
+entry on a public deployment. Design: [`docs/ui_design.md`](docs/ui_design.md).
+
+## Deploy (Streamlit Community Cloud + Aiven MySQL)
+1. **Cloud database:** a free [Aiven for MySQL](https://console.aiven.io/signup) service (real MySQL 8 — the
+   stored procedures need it). In *Advanced configuration* set `mysql.sql_require_primary_key = off`.
+2. **Load it from a laptop:** put the Aiven host, port, user and password in `.env`, then run the same three
+   commands as locally: `python scripts/setup_database.py`, `python -m src.synthesizer.run`,
+   `python scripts/run_etl.py --migrate`.
+3. **App:** [share.streamlit.io](https://share.streamlit.io) → *Create app* → this repository, branch `main`,
+   file `app.py`, Python 3.11 → *Advanced settings → Secrets*:
+   ```toml
+   DB_HOST = "mysql-xxxxxxxx.aivencloud.com"
+   DB_PORT = "12345"
+   DB_USER = "avnadmin"
+   DB_PASSWORD = "…"
+   APP_PASSCODE = "…"        # unlocks data entry; dashboards stay public
+   ```
+   Root-level secrets become environment variables, which `DatabaseSettings.from_env()` reads — no code change.
+
 ## Python backend
 Validated entity classes and one manager per area, all sharing a Singleton connection pool:
 ```python
@@ -87,7 +113,7 @@ Design, OOP principles and decisions: [`docs/backend_design.md`](docs/backend_de
 python -m pytest -q                        # everything (needs MySQL with the ETL loaded)
 python -m pytest tests/test_models.py -q   # entity rules only — no database needed
 ```
-211 tests, about 5 minutes. Database tests run inside rolled-back transactions — they use the real
+223 tests, about 6 minutes. Database tests run inside rolled-back transactions — they use the real
 data and never change it; they skip themselves when MySQL or the loaded data is missing.
 
 ## Design documentation
