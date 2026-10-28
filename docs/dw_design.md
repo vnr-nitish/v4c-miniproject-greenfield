@@ -289,15 +289,20 @@ ETL conversion: `end_date = COALESCE(effective_end_date - INTERVAL 1 DAY, '9999-
 
 ### 8.5 Initial load vs incremental change
 
+All three cases run through **one procedure**, `sp_load_dim_employee_scd2(batch, employee_id)`,
+which compares OLTP versions with warehouse versions by `(employee_id, start_date)`
+(implemented in Phase 2 — full description in [`etl_design.md`](etl_design.md) §5):
+
 - **Initial load:** all OLTP versions inserted at once; `version_number` from `ROW_NUMBER()`,
   `end_date` from `LEAD(start_date) − 1 day`, `row_hash` from `MD5(CONCAT_WS(...))`.
-- **Incremental (ETL run):** compare `row_hash` of the OLTP current version with the DW current
-  version; on difference → expire the DW row (`end_date = change date − 1`, `is_current = 0`) and
-  insert the new version.
+- **Incremental (ETL run):** a new OLTP version → expire the DW row (`end_date = change date − 1`,
+  `is_current = 0`) and insert the new version; a changed `row_hash` on an existing version → a
+  correction, overwritten in place; changed personal attributes → Type 1 overwrite on every
+  version.
 - **UI-triggered (Phase 4 requirement):** when HR changes an employee's department in Streamlit,
-  one transaction (1) closes the current OLTP history row and inserts the new one, then
-  (2) calls `sp_scd2_apply_employee(employee_id)`, which performs the expire-and-insert for that
-  employee immediately.
+  one transaction (1) calls `hr_oltp.sp_change_employee_position`, which closes the current OLTP
+  history row and inserts the new one, then (2) calls `hr_dw.sp_scd2_apply_employee(employee_id)`,
+  which runs the same SCD2 procedure for that one employee immediately.
 
 ---
 
@@ -400,15 +405,15 @@ blindly to every dimension was evaluated and rejected. Three options were compar
 
 ---
 
-## 11. ETL outline (implemented in Phase 2)
+## 11. ETL outline (implemented in Phase 2 — see [`etl_design.md`](etl_design.md))
 
 | Procedure | Purpose | SQL techniques |
 |---|---|---|
 | `sp_load_dim_date` | generate 2015–2030 | recursive CTE |
-| `sp_load_dim_department` | Type 1 upsert | `INSERT … ON DUPLICATE KEY UPDATE` |
-| `sp_load_dim_project` | Type 1 upsert + derived attributes | CTE |
-| `sp_load_dim_employee_scd2` | initial + incremental SCD2 | `ROW_NUMBER()`, `LEAD()`, `MD5` row hash |
-| `sp_scd2_apply_employee` | single-employee SCD2 from the UI | transaction |
+| `sp_load_dim_department` | Type 1 | update changed rows, insert new ones (etl_design E7) |
+| `sp_load_dim_project` | Type 1 + derived attributes, special member | CTE |
+| `sp_load_dim_employee_scd2` | initial + incremental + single-employee SCD2 | `ROW_NUMBER()`, `LEAD()`, `MD5` row hash |
+| `sp_scd2_apply_employee` | single-employee SCD2 from the UI, inside the app's transaction | calls the procedure above |
 | `sp_load_fact_performance_reviews` | incremental fact load, point-in-time lookup, rejects | CTE, `NOT EXISTS` |
 | `sp_run_etl` | orchestrates all steps, logs each one | error handler, transaction |
 

@@ -7,6 +7,9 @@
 --                        years since promotion, last salary hike, latest survey and review)
 --                        from the normalized tables. It proves the decomposition is lossless:
 --                        nothing derivable was stored, yet everything can be reconstructed.
+--                        The anchor dates (role_since, manager_since, last_promotion_date) are
+--                        exposed too, so tenure can be computed as of any date — the ETL
+--                        reconciliation uses them with the synthesizer's snapshot date.
 --
 -- Convention: an employee's latest job version stays open (effective_end_date IS NULL)
 -- even after they leave; leaving is recorded in employees.exit_date. Every employee
@@ -143,7 +146,10 @@ SELECT
     TIMESTAMPDIFF(YEAR, a.role_since, p.as_of_date)                        AS years_in_current_role,
     TIMESTAMPDIFF(YEAR, COALESCE(a.last_promotion_date, p.hire_date), p.as_of_date)
                                                                            AS years_since_last_promotion,
-    TIMESTAMPDIFF(YEAR, a.manager_since, p.as_of_date)                     AS years_with_curr_manager
+    TIMESTAMPDIFF(YEAR, a.manager_since, p.as_of_date)                     AS years_with_curr_manager,
+    a.role_since,
+    a.manager_since,
+    a.last_promotion_date
 FROM people p
 JOIN employee_job_history h  ON h.employee_id = p.employee_id AND h.effective_end_date IS NULL
 JOIN departments d           ON d.department_id = h.department_id

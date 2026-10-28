@@ -216,6 +216,20 @@ Full design: [`docs/dw_design.md`](dw_design.md).
 - Committed to `feature/database-design`; **PR #2** (database design: ER model, star schema, design
   documentation) opened and merged into `main`.
 
+## Step 11 — Design questions answered and documented
+
+Two questions raised during the star-schema review were answered and written into the design
+document for the final report:
+
+1. **Why a star schema and not a snowflake?** — new section 3 of `dw_design.md`: comparison table
+   (joins, speed, SQL simplicity, storage, SCD2 behaviour), a worked query (2 joins vs 5), why
+   normalization belongs in OLTP rather than the warehouse, and when a snowflake *would* be
+   right. Recorded as decision **D15**.
+2. **Why not sk = 0 for missing foreign keys?** — section 9 of `dw_design.md` expanded: three
+   options compared (NULL FKs, sk = 0 in every dimension, targeted special member), with the
+   concrete problems of each — silently dropped rows, inflated headcounts, distorted averages,
+   hidden data errors, meaningless SCD columns, and MySQL's AUTO_INCREMENT treatment of 0.
+
 ## Step 12 — Phase 2: DDL scripts (branch `feature/database-ddl`)
 
 **Plan approved first:** file list and run order, how each design rule becomes SQL, reference-data
@@ -350,16 +364,99 @@ D18, touches only 2.8 % of job versions, and gives the SCD Type 2 history believ
 Alternatives (dropping it, changing hire levels or ages directly) would either leave the defect
 or override source data.
 
-## Step 11 — Design questions answered and documented
+- Committed to `feature/data-synthesizer`; **PR #4** opened and merged into `main`.
 
-Two questions raised during the star-schema review were answered and written into the design
-document for the final report:
+## Step 15 — Phase 2: ETL plan (branch `feature/etl-pipeline`)
 
-1. **Why a star schema and not a snowflake?** — new section 3 of `dw_design.md`: comparison table
-   (joins, speed, SQL simplicity, storage, SCD2 behaviour), a worked query (2 joins vs 5), why
-   normalization belongs in OLTP rather than the warehouse, and when a snowflake *would* be
-   right. Recorded as decision **D15**.
-2. **Why not sk = 0 for missing foreign keys?** — section 9 of `dw_design.md` expanded: three
-   options compared (NULL FKs, sk = 0 in every dimension, targeted special member), with the
-   concrete problems of each — silently dropped rows, inflated headcounts, distorted averages,
-   hidden data errors, meaningless SCD columns, and MySQL's AUTO_INCREMENT treatment of 0.
+`main` updated after the PR #4 merge; new branch `feature/etl-pipeline`. A plan was presented
+before any code: two stages (staging → OLTP migration; OLTP → warehouse ETL), the cleaning rules
+and the SQL technique for each planted issue, the SCD Type 2 algorithm, the fact load, logging,
+error handling, and how the result would be proven.
+
+**All six decisions approved as recommended** (full rationale: [`etl_design.md`](etl_design.md) §9):
+
+| ID | Decision |
+|---|---|
+| E1 | The migration is a one-time procedure with an explicit full-reload switch; it refuses to run twice |
+| E2 | One SCD Type 2 procedure for the initial load, incremental runs and single-employee changes |
+| E3 | Only the batch entry points commit; the app's change and its warehouse update share one transaction |
+| E4 | Department aliases handled by a cleaning CTE in the procedure — no new table, no diagram change |
+| E5 | `EtlManager` built now as the first data-access manager |
+| E6 | `vw_employee_snapshot` exposes the anchor dates; salary and budget bands as proposed |
+
+## Step 16 — Phase 2: ETL implementation
+
+**Profiled first:** staging end dates already equal the next start (0 mismatches); case variants
+of labels collapse under the case-insensitive collation but stray spaces do not (the 0900
+collation is NO PAD), so `TRIM` is essential; budget and income distributions chosen so every band
+is populated (budgets 360 / 961 / 549 / 130).
+
+**Built:**
+
+| File | Contents |
+|---|---|
+| `sql/07_oltp_procedures.sql` | `sp_migrate_from_staging` (ranked → cleaned → resolved CTEs per table, rejects, one log row per fix), `sp_change_employee_position` (validated job change, no commit) |
+| `sql/08_dw_procedures.sql` | logging helpers, `sp_reset_warehouse`, `sp_load_dim_date` (recursive CTE), Type 1 department / project loads, `sp_load_dim_employee_scd2`, `sp_load_fact_performance_reviews`, `sp_scd2_apply_employee`, `sp_run_etl` (EXIT HANDLER, GET DIAGNOSTICS, RESIGNAL) |
+| `sql/03_oltp_views.sql` | `vw_employee_snapshot` + `role_since`, `manager_since`, `last_promotion_date` |
+| `sql/validation_queries.sql` | Workbench proof: run history, reconciliation, PASS / FAIL checks, lossless reconstruction, SCD2 walkthrough, a rolled-back department change |
+| `src/db_manager.py` | new `call_procedure()` (IN arguments bound, OUT parameters read back) |
+| `src/dal/etl_manager.py` | `EtlManager(DatabaseConnection)` |
+| `scripts/run_etl.py` | CLI: `--migrate`, `--full-reload`; prints each batch's steps and rejects |
+| `scripts/setup_database.py` | `--only NN` to (re)install views / procedures without touching data; comments kept in procedure bodies |
+| `tests/test_etl.py` | 28 tests: reconciliation, manifest, D19, contiguity, lossless reconstruction, SCD2, fact keys, fiscal calendar, idempotency, change flows, refused changes |
+
+**First run:** the migration worked first time — 1,845,883 rows in 206 s, 0 rejects, and every
+fix count equal to the anomaly manifest (500 duplicates, 979 gender codes, 6,289 labels,
+1,389 resubmissions). The warehouse load then failed at once —
+`GREATEST(unsigned, signed)` returns DECIMAL, which `cte_max_recursion_depth` rejects. The error
+handler worked as designed: batch marked FAILED with step and message, error re-raised (E11).
+
+**Problems found and fixed** (details in `etl_design.md` §9):
+- A re-run with no changes took 93 s, 89 s of it in the SCD2 compare. `EXPLAIN ANALYZE` showed the
+  personal columns repeated on 309K version rows overflowing MySQL's default 128 MB buffer pool
+  and rows written out of key order. Source split into person + version tables, inserted in key
+  order: re-run **93 s → 47 s**, one employee 0.02 s (E10). An optimizer hint tried on the way
+  turned out to change nothing and was removed.
+- With autocommit off, a refused second migration rolled back its own batch header, leaving no
+  trace — entry points now commit the header first (E9). Verified: the refusal is logged FAILED.
+- Type 1 dimensions use update-then-insert instead of `ON DUPLICATE KEY UPDATE` (exact counts, no
+  AUTO_INCREMENT gaps) (E7); change reasons derived when not given (E8); `--only` for setup (E12).
+- Walkthrough example re-chosen: the employee with the most versions had left before the first
+  review cycle; the example is now the employee whose reviews link to the most versions.
+
+**Final end-to-end rebuild** (`python scripts/run_etl.py --migrate --full-reload`): migration
+225 s, warehouse 147 s, 0 rejects, every step SUCCESS. A second warehouse run writes 0 rows.
+
+**Verified:** staging → OLTP → warehouse reconciliation 100 %; SCD2 periods contiguous, one
+current version per employee; every fact linked to the version valid on its review date;
+**lossless reconstruction** of the IBM columns: 100 % (age, tenure, role, promotion, level,
+income, …), years with manager 98.09 %, salary hike 92.09 % — identical to the synthesizer's
+fidelity. The rolled-back department change in Workbench: old version expired yesterday, new
+Sales version current from today. `split_sql` checked against the committed version: all 124
+statements in the 10 SQL files are identical apart from the now-preserved comments.
+Whole test suite: **82 / 82 pass** (54 earlier + 28 ETL tests, ≈ 3 minutes).
+
+**Known limit recorded:** `vw_employee_snapshot` always rebuilds all employees (≈ 17 s even for
+one), because MySQL cannot push a filter into its window-function CTEs; it is for bulk
+reconciliation — single-employee screens will use `vw_employee_current` (0.01 s) or the warehouse.
+
+## Step 17 — Requirements check and the "five tables" question
+
+Before opening the pull request, every Phase 1 and Phase 2 requirement was checked against the
+deliverables — all covered. Two questions were raised:
+
+1. **"The problem statement lists five OLTP entities — should the OLTP have only five tables?"**
+   Re-examined with measurements on the loaded data. Five tables *can* be normalized, but with
+   this dataset only by storing less: no job history in the OLTP (208,986 historical versions
+   would have to go from staging straight to the warehouse), 6,686 surveys lost, the business
+   rules hard-coded or dropped, and no lossless reconstruction. Switching would also have meant
+   rewriting the OLTP DDL, the ETL, the ER diagram, about 70 tests and the design documents.
+   **Decision D25: keep the 14-table design**; every required entity is present, and the
+   explanation is in `oltp_design.md` §14 ("Why more than five tables?").
+2. **"Shouldn't there be three diagrams?"** No — the problem statement asks for two editable
+   diagrams: the ER diagram (OLTP) and the dimensional model diagram. "OLAP Data Warehouse Design
+   (Dimensional Model)" is one deliverable: the star schema is the warehouse's dimensional model.
+
+Also noted: the diagram screenshots shared in this review were an older render — the `.drawio`
+files already contain the PR #3 updates (`year_month_label`, `current_version_key`, GEN markers).
+They will be re-rendered from the files at the final diagram check.
