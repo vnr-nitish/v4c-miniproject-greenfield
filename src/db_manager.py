@@ -122,7 +122,7 @@ class DatabaseSettings:
 
     @classmethod
     def from_env(cls, env_file: Path | None = None) -> "DatabaseSettings":
-        load_dotenv(env_file or PROJECT_ROOT / ".env")
+        load_dotenv(env_file or PROJECT_ROOT / ".env", override=True)    # the file wins over stale shell variables
         try:
             return cls(
                 host=os.environ["DB_HOST"],
