@@ -64,14 +64,16 @@ reviews. Every table follows the same four-step pattern, written as CTEs:
 | Data-quality issue (planted, decision D21) | Fix in SQL | Result (seed 42) |
 |---|---|---:|
 | Employee sent twice | `ROW_NUMBER()` per `employee_code`, newest kept | 500 removed |
-| Gender as "M" / "F" | `CASE UPPER(TRIM(gender))` → Male / Female | 979 standardized |
-| Department / role labels: case, stray spaces, aliases "R&D", "HR", "Sales Dept" | `UPPER(TRIM())` match against a label map of names, codes and aliases | 6,289 standardized |
+| Gender as "M" / "F" | `CASE UPPER(TRIM(gender))` → Male / Female | 1,027 standardized |
+| Department / role labels: case, stray spaces, aliases "R&D", "HR", "Sales Dept" | `UPPER(TRIM())` match against a label map of names, codes and aliases | 6,172 standardized |
 | Review resubmitted with a corrected KPI | `ROW_NUMBER()` per employee and review year, latest kept | 1,389 removed |
 | NumCompaniesWorked counts the current employer; 0 is a coding error (D19) | `CASE`: no prior experience → 0; 0 or 1 with experience → 1; otherwise value − 1 | 16,500 recoded |
 | Job-version end dates | recomputed with `LEAD(start)`, compared with the staged value | 0 corrections needed |
 
 Every count equals the synthesizer's anomaly manifest exactly — the label noise, for example, was
-planted as 1,614 + 1,553 + 1,588 + 1,534 = 6,289 rows (a test checks all of them).
+planted as 1,473 + 1,571 + 1,568 + 1,560 = 6,172 rows (a test checks all of them). (Counts after the
+review-history fix, synthesizer_design.md D26; the first run planted 979 gender codes and 6,289
+labels — the rates are unchanged, only which rows were picked.)
 
 **Validation rules (reject reasons).** Employees: invalid code format, unknown gender, education
 level / field or exit reason, exit date without reason (or the reverse), attrition flag
@@ -110,7 +112,7 @@ Boundaries were chosen after profiling the data so that every band is populated.
 special member (`COALESCE(project_id, 0)` → `project_sk = −1`); the same-year survey (nullable
 measures, D7). `monthly_income_at_review` comes from the version, so pay is reported as it was at
 the time. A failed lookup sends the review to `etl_rejected_rows` instead of a NULL key
-(dw_design.md §9.6). Result: 463,011 facts, 0 rejected, 16,965 reviews (3.7 %) on the "No Project"
+(dw_design.md §9.6). Result: 463,015 facts, 0 rejected, 16,961 reviews (3.7 %) on the "No Project"
 member.
 
 ## 5. SCD Type 2 — `sp_load_dim_employee_scd2`
@@ -193,18 +195,19 @@ Since Phase 3 the four position rules live in `sp_validate_position`, shared wit
 
 ## 8. Results (100,000 employees, seed 42, laptop, MySQL 8.0.46, 128 MB buffer pool)
 
-Final end-to-end rebuild with the finished code (`python scripts/run_etl.py --migrate --full-reload`):
+End-to-end rebuild with the finished code (`python scripts/run_etl.py --migrate --full-reload`),
+last run after the review-history fix (synthesizer_design.md D26–D27):
 
 | Run | Rows | Time |
 |---|---:|---:|
-| Stage 1 migration (6 load steps + 6 fix / check steps) | 1,845,883 loaded, 0 rejected | 225 s |
-| Stage 2 initial load (3 departments, 2,000 projects, 308,986 versions, 463,011 facts; dim_date kept by the reset) | 774,000 | 147 s (SCD2 57 s, fact 90 s) |
+| Stage 1 migration (6 load steps + 6 fix / check steps) | 1,845,887 loaded, 0 rejected | 253 s |
+| Stage 2 initial load (3 departments, 2,000 projects, 308,986 versions, 463,015 facts; dim_date kept by the reset) | 774,004 | 165 s (SCD2 66 s, fact 99 s) |
 | Stage 2 re-run, nothing changed | 0 | 47 s |
 | One employee from the app (`sp_scd2_apply_employee`) | 2 | 0.02 s |
 
 Warehouse content after the load: salary bands 79,601 / 116,200 / 55,156 / 37,409 / 20,620
 versions; budget bands 360 / 961 / 549 / 130 projects; 602 of 1,563 completed projects delayed
-(38.5 %, average delay 12.3 days); 1,051 facts without a same-year survey (NULL survey measures).
+(38.5 %, average delay 12.3 days); 1,053 facts without a same-year survey (NULL survey measures).
 
 Verification (all automated in `tests/test_etl.py`, also runnable in Workbench from
 `sql/validation_queries.sql`):
@@ -295,7 +298,7 @@ ids.
 
 **Q: Why log each data-quality fix separately?**
 So the log is a data-quality report: anyone can see in Workbench that 500 duplicates were removed
-and 979 gender codes fixed — and a test compares those numbers with the planted ones.
+and 1,027 gender codes fixed — and a test compares those numbers with the planted ones.
 
 **Q: Why are delays measured only for completed projects?**
 A cancelled project's end date is its cancellation date, not a delivery date, and a running

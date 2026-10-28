@@ -535,3 +535,48 @@ planned `NTILE` quartiles, which would have put equal scores in different bands 
 **Verified:** whole suite **197 / 197 pass** (82 earlier + 115 new, ≈ 5 minutes). After the run,
 every table count equals the loaded data — the rolled-back tests left nothing behind. No schema
 change, so both draw.io diagrams are unaffected.
+
+## Step 20 — Fix: review and survey history (branch `fix/review-history`)
+
+*(Made on its own branch and pull request while Phase 3 was in review, then merged into
+`feature/oop-backend` so the Phase 3 analytics could be recalibrated on the corrected data.)*
+
+**Found while building the Phase 3 analytics:** the year-over-year figures jumped in the latest
+cycle (FY2025-26): low ratings 4 % → 0 %, overtime 35 % → 24 %, average rating +0.039 in one year;
+and in every cycle dozens of people (up to 222 per department) tied for first place. Both were
+traced to the review generator (synthesizer_design.md D26–D27): earlier years used the full 1–4
+rating scale although IBM's latest values use only 3 and 4; overtime flipped symmetrically, pulling
+earlier years towards 50 %; and KPI scores were clipped, so 1,810 outstanding reviews scored
+exactly 100.00.
+
+**Analysed before changing anything:** the proposed rule was first simulated on the loaded data in
+a scratch script — the jump disappeared and rank-1 ties fell to 1–3 people — and presented with its
+consequence (no ratings 1–2 in the generated history, nearly flat rating and KPI trends).
+**Approved:** fix it (H1); do not invent trends (H2); a separate fix branch and pull request
+before Phase 3 (H3).
+
+**Built:** earlier years walk back from the IBM values with a Metropolis–Hastings step whose
+long-run distribution is the IBM distribution of the employees who stayed (D26); KPI from a
+truncated normal distribution (D27); persistence settings in `SynthesizerConfig`; nine new
+validator rules (each year's rating mix, overtime and survey means against the snapshot, KPI at a
+band limit), so the synthesis report now checks 42 rules.
+
+**Protecting the other phases:** before regenerating, every OLTP and warehouse table was
+fingerprinted (row count + checksum of all business columns). After regenerating 100,000
+employees and rebuilding OLTP and the warehouse (`run_etl.py --migrate --full-reload`):
+- **16 of 19 tables identical**, including employees, the 308,986 job versions, projects,
+  assignments, and `dim_employee` with every SCD Type 2 version and surrogate key. Only
+  `performance_reviews`, `employee_surveys` and `fact_performance_reviews` changed, as intended.
+- IBM fidelity identical (100 / 100 / 98.09 / 92.09 %).
+- Rule violations 0 of 42; ETL 0 rejected rows.
+- All 82 Phase 1–2 tests pass.
+
+Side effects, documented:
+- Review dates are drawn afresh, so 4 more reviews of people leaving during review season exist
+  (463,015).
+- The planted-issue counts moved (gender codes 979 → 1,027, labels 6,289 → 6,172; same rates,
+  different rows), and the ETL fixed each exactly.
+
+**Result per cycle 2019–2025:** outstanding 15.1–15.5 %, average KPI 80.07–80.14, overtime 26.7 % →
+24.1 % (smooth: earlier cycles hold more people who later left), no low ratings; rank 1 per
+department shared by 1–3 people. No schema change, so both diagrams are unaffected.

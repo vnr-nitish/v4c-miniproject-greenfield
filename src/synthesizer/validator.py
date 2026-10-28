@@ -14,6 +14,7 @@ import pandas as pd
 
 from src.synthesizer.base import BaseGenerator
 from src.synthesizer.dataset import SyntheticDataset
+from src.synthesizer.performance import KPI_BANDS
 from src.synthesizer.reference import DEPARTMENT_ROLES, JOB_LEVELS, JOB_ROLES
 
 full_years = BaseGenerator.full_years
@@ -155,6 +156,20 @@ class SynthesisValidator:
         latest = r.groupby("emp_idx").tail(1)
         self._add("reviews", "latest review carries the IBM rating",
                   latest.rating.to_numpy() != e.performance_rating.to_numpy()[latest.emp_idx])
+        # D26: earlier years have the snapshot's distribution (the IBM values of the employees who
+        # stayed); the tolerances allow for sampling noise in small builds and for leavers' decline
+        stayers = e[e.attrition == "No"]
+        self._add("reviews", "earlier reviews use only the ratings IBM uses",
+                  ~r.rating.isin(e.performance_rating.unique()))
+        yearly = r.groupby("year")
+        self._add("reviews", "each year's share of outstanding ratings within 3 points of the snapshot",
+                  (yearly.rating.apply(lambda x: (x == 4).mean()) - (stayers.performance_rating == 4).mean()).abs()
+                  > 0.03)
+        self._add("reviews", "each year's overtime share within 5 points of the snapshot",
+                  (yearly.overtime.mean() - (stayers.over_time == "Yes").mean()).abs() > 0.05)
+        # D27: KPI scores are drawn inside their band, not clipped onto its limits
+        self._add("reviews", "KPI scores do not pile up at a band limit (at most 0.1 % of reviews)",
+                  [self._kpi_at_band_limit() > 0.001])
         sd = s.survey_date.to_numpy().astype(D)
         shire = e.hire_date.to_numpy().astype(D)[s.emp_idx]
         sext = e.exit_date.to_numpy().astype(D)[s.emp_idx]
@@ -164,6 +179,15 @@ class SynthesisValidator:
                     "job_involvement", "work_life_balance"):
             self._add("surveys", f"latest survey carries the IBM {col}",
                       slatest[col].to_numpy() != e[col].to_numpy()[slatest.emp_idx])
+            self._add("surveys", f"each year's mean {col} within 0.10 of the snapshot",
+                      (s.groupby("year")[col].mean() - stayers[col].mean()).abs() > 0.10)
+
+    def _kpi_at_band_limit(self) -> float:
+        """Share of reviews whose KPI score equals the lowest or highest value of its rating's band."""
+        r = self._d.reviews
+        low = r.rating.map(lambda rating: KPI_BANDS[rating][2])
+        high = r.rating.map(lambda rating: KPI_BANDS[rating][3])
+        return float(((r.kpi_score == low) | (r.kpi_score == high)).mean())
 
     def _check_projects(self) -> None:
         p, a, e = self._d.projects, self._d.assignments, self._d.employees
@@ -261,6 +285,12 @@ class SynthesisValidator:
             "department heads": self._extras["department_heads"],
             "reviews per cycle year": r.year.value_counts().sort_index().to_dict(),
             "rating distribution (all reviews)": (r.rating.value_counts(normalize=True).sort_index() * 100).round(1).to_dict(),
+            "outstanding ratings per cycle year (%)": (r.groupby("year").rating.apply(lambda x: (x == 4).mean())
+                                                       * 100).round(1).to_dict(),
+            "overtime per cycle year (%)": (r.groupby("year").overtime.mean() * 100).round(1).to_dict(),
+            "mean KPI score per cycle year": r.groupby("year").kpi_score.mean().round(2).to_dict(),
+            "mean job satisfaction per survey year": s.groupby("year").job_satisfaction.mean().round(2).to_dict(),
+            "KPI scores exactly at a band limit (D27)": f"{self._kpi_at_band_limit() * 100:.2f} %",
             "surveys per year": s.year.value_counts().sort_index().to_dict(),
             "projects by status": p.status.value_counts().to_dict(),
             "completed projects finishing late": f"{delayed:.1f} %",

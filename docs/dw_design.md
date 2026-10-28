@@ -483,7 +483,7 @@ back-test, measured performance: [`backend_design.md`](backend_design.md) §8.
 | dim_department | 3 |
 | dim_project | 2,000 + 1 special member |
 | dim_employee | ≈ 309,000 (one row per job version; 308,986 generated) |
-| fact_performance_reviews | ≈ 463,000 (one row per review; 463,011 generated after removing resubmissions) |
+| fact_performance_reviews | ≈ 463,000 (one row per review; 463,015 generated after removing resubmissions) |
 
 Estimated in §4 (300K / 477K); the generated figures come from `synthesis_report.md` and will be
 confirmed by the ETL load.
