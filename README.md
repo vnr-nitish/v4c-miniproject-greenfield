@@ -13,8 +13,8 @@ Python 3.11 (OOP, pandas, Faker) · MySQL 8 · Streamlit · Plotly · draw.io ·
 
 ## Project structure
 ```
-├── app.py                # Streamlit entry point
-├── pages/                # Streamlit pages (data entry + dashboards)
+├── app.py                # Streamlit entry point (navigation, filters, warm-up)
+├── views/                # Streamlit pages (data entry + dashboards); src/ui/ holds theme and 3D charts
 ├── src/
 │   ├── db_manager.py     # Singleton DatabaseConnection (shared pool, transactions, error translation)
 │   ├── exceptions.py     # application exceptions (validation, business rules, not found, …)
@@ -70,6 +70,15 @@ python scripts/run_etl.py --migrate --full-reload  # rebuild OLTP and warehouse 
 [`sql/validation_queries.sql`](sql/validation_queries.sql) shows in MySQL Workbench that it worked
 (reconciliation, SCD Type 2 history, a rolled-back department change).
 
+## Run the web app
+```bash
+streamlit run app.py
+```
+Data entry (onboarding, Employee 360 job changes with SCD Type 2, projects, reviews), warehouse
+dashboards with interactive 3D views (Workforce Galaxy, trend surface, top-performer podium, risk
+terrain, project pressure cube, career path) and an ETL page. Set `APP_PASSCODE` to protect data
+entry on a public deployment. Design: [`docs/ui_design.md`](docs/ui_design.md).
+
 ## Python backend
 Validated entity classes and one manager per area, all sharing a Singleton connection pool:
 ```python
@@ -87,7 +96,7 @@ Design, OOP principles and decisions: [`docs/backend_design.md`](docs/backend_de
 python -m pytest -q                        # everything (needs MySQL with the ETL loaded)
 python -m pytest tests/test_models.py -q   # entity rules only — no database needed
 ```
-211 tests, about 5 minutes. Database tests run inside rolled-back transactions — they use the real
+223 tests, about 6 minutes. Database tests run inside rolled-back transactions — they use the real
 data and never change it; they skip themselves when MySQL or the loaded data is missing.
 
 ## Design documentation

@@ -609,3 +609,22 @@ functional programming"; three suggestions were proposed and **approved**:
 - New tests: a busy pool waits and then fails clearly; a taken code is retried while other
   duplicates are not; the guard stops a rebuild before anything runs.
 - Fingerprints of all 19 tables were taken before and after the suite: identical.
+## Step 22 — Phase 4: Streamlit UI (branch `feature/streamlit-dashboard`)
+
+**Plan approved as recommended** (U1–U7, `ui_design.md` §3): dark "command centre" theme, Plotly 3D
+for every 3D view, passcode-protected data entry on the public site, six 3D views each with a 2D
+companion, a sampled Workforce Galaxy, honest flat trends, background warm-up of the analytics cache.
+
+**Checked first:** Streamlit 1.66 and Plotly 7.1 provide navigation, dialogs, chart and table
+selection events and WebGL 3D traces — nothing beyond `streamlit` and `plotly` is needed, so the app
+deploys unchanged on Streamlit Community Cloud. The data was checked for each 3D view (e.g. the risk
+terrain: 49–56 % of entry-level staff in their first two years are High risk, against 3–7 % elsewhere).
+
+**Built:** `app.py`, ten pages in `views/`, `src/ui/` (theme, charts, forms, common helpers), two
+manager methods (`AnalyticsManager.role_trends`, `EmployeeManager.example_codes`), dark theme config,
+`docs/ui_design.md`; `docs/deferred_items.md` committed with this branch.
+
+**Verified:** `tests/test_app.py` — every page renders against the 100K data, the app shell shows the
+three filters, invalid onboarding shows field messages (12 tests); the server starts and answers.
+One fix on the way: pandas 3 drops the grouping column in `groupby().apply()`, so the stratified
+sample uses `groupby().sample()`.
