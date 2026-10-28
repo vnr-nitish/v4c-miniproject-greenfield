@@ -51,6 +51,19 @@ def sidebar_filters() -> None:
     st.session_state["cycles"] = options["fiscal_years"]
 
 
+try:
+    AnalyticsManager().data_version()                 # one cheap query: is the database reachable?
+except HRAppError as err:
+    st.error("### The database is not reachable\n"
+             f"{err}\n\n"
+             "**Check:** MySQL is running · `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD` in `.env` (local) or in "
+             "the app's Secrets (Streamlit Cloud) are correct · the database was loaded "
+             "(`python scripts/setup_database.py`, `python -m src.synthesizer.run`, "
+             "`python scripts/run_etl.py --migrate`). Then reload this page.")
+    from src.db_manager import DatabaseConnection
+    DatabaseConnection.reset()                         # the next reload tries again with fresh settings
+    st.stop()
+
 start_warm_up()
 pages = {
     "Overview": [st.Page("views/overview.py", title="Command centre", icon=":material/rocket_launch:", default=True)],
