@@ -239,6 +239,9 @@ def test_snapshot_view_rebuilds_ibm_style_columns(cur):
         3 + full_years(date(2015, 1, 1), today),    # prior experience + tenure
         4, "Yes", 2,
     )
+    cur.execute("SELECT role_since, manager_since, last_promotion_date "
+                "FROM hr_oltp.vw_employee_snapshot WHERE employee_id = %s", (emp,))
+    assert cur.fetchone() == (date(2021, 7, 1), date(2021, 7, 1), date(2018, 1, 1))
 
 
 # ----------------------------------------------------------------------------- negative: employees
@@ -411,14 +414,16 @@ def test_dw_rejects_second_special_project_member(cur):
 
 
 def test_dw_rejects_fact_with_unknown_employee(cur):
-    cur.execute("INSERT INTO hr_dw.dim_date VALUES (20250120, '2025-01-20', 20, 'Monday', 1, FALSE, 4, 1, "
+    # works on an empty and on a loaded warehouse: the date and department rows may already exist
+    cur.execute("INSERT IGNORE INTO hr_dw.dim_date VALUES (20250120, '2025-01-20', 20, 'Monday', 1, FALSE, 4, 1, "
                 "'January', 1, 'Q1', 2025, '2025-01', 'FY2024-25', 'Q4')")
-    cur.execute("INSERT INTO hr_dw.dim_department (department_id, department_code, department_name) "
+    cur.execute("INSERT IGNORE INTO hr_dw.dim_department (department_id, department_code, department_name) "
                 "VALUES (2, 'RND', 'Research & Development')")
-    department_sk = cur.lastrowid
+    cur.execute("SELECT department_sk FROM hr_dw.dim_department WHERE department_id = 2")
+    department_sk = cur.fetchone()[0]
     err = expect_error(cur, "INSERT INTO hr_dw.fact_performance_reviews (review_id, date_sk, employee_sk, "
                             "department_sk, project_sk, performance_rating, kpi_score, training_sessions, "
                             "overtime_flag, monthly_income_at_review, etl_batch_id) "
-                            "VALUES (1, 20250120, 999999, %s, -1, 3, 80, 2, 0, 3000, 0)",
+                            "VALUES (4000000000, 20250120, -999, %s, -1, 3, 80, 2, 0, 3000, 0)",
                        (department_sk,), NO_PARENT)
     assert "fk_fact_employee" in err.msg

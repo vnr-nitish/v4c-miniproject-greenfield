@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -27,6 +28,8 @@ from src.exceptions import ConfigurationError, DatabaseError
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+_PROCEDURE_NAME = re.compile(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)?")
 
 
 @dataclass(frozen=True)
@@ -152,3 +155,20 @@ class DatabaseConnection:
         with self.transaction() as cur:
             cur.execute(sql, params)
             return cur.rowcount
+
+    def call_procedure(self, name: str, args: Sequence[Any] = (), out_params: int = 0) -> tuple:
+        """CALL a stored procedure in its own transaction and return its OUT parameter values.
+
+        IN arguments are bound as query parameters; OUT parameters are read back through
+        session variables on the same connection. The ETL entry points commit themselves;
+        for every other procedure the commit of this transaction applies.
+        """
+        if not _PROCEDURE_NAME.fullmatch(name):
+            raise ValueError(f"Invalid procedure name: {name!r}")
+        outs = [f"@out{i}" for i in range(out_params)]
+        with self.transaction() as cur:
+            cur.execute(f"CALL {name}({', '.join(['%s'] * len(args) + outs)})", tuple(args))
+            if not outs:
+                return ()
+            cur.execute(f"SELECT {', '.join(outs)}")
+            return tuple(cur.fetchone())

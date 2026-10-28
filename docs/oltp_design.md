@@ -154,6 +154,11 @@ Treatments: **Stored** · **Lookup** (value moved to a reference table, referenc
 
 **Lossless decomposition:** the view `vw_employee_snapshot` reconstructs every meaningful IBM
 column from the normalized tables. This is tested by rebuilding the original layout and comparing it.
+The view also exposes the anchor dates (`role_since`, `manager_since`, `last_promotion_date`), so
+tenure can be computed as of any date. Result after the Phase 2 ETL, for all 100,000 employees as
+of the snapshot date: 100 % of the columns reproduced exactly, except years with the current
+manager (98.09 %) and the last salary hike (92.09 % within one point) — the synthesizer's own
+fidelity, so nothing is lost by the decomposition ([`etl_design.md`](etl_design.md) §8).
 
 ---
 
@@ -414,6 +419,7 @@ leaving is recorded with `exit_date`, not by deleting the row.
 | D3 | IBM official rating scale 1–4 | Custom 1–5 | Faithful to source; synthesizer adds ratings 1–2 for earlier years |
 | D4 | Survey scales enforced by CHECK | Lookup tables | No index overhead on ~450K rows; labels applied in warehouse |
 | D5 | Volume option A — 100,000 employees | 30,000 employees | Satisfies "scale to 100,000+ rows" literally |
+| D25 | Keep 14 tables after a review against the five entities the problem statement lists (added in Phase 2) | Exactly five tables | Five tables reach 3NF only by dropping the job history, 6,686 surveys and the business rules — see §14 |
 
 ---
 
@@ -431,4 +437,53 @@ leaving is recorded with `exit_date`, not by deleting the row.
 
 Assignments came out at twice the estimate because staffing is generated per employment year
 (about one assignment per employee per year) so that 96 % of reviews have a project — see
-`synthesizer_design.md`, refinement I7. The OLTP load (Phase 2) will confirm the final counts.
+`synthesizer_design.md`, refinement I7. The Phase 2 OLTP load confirmed these counts exactly
+([`etl_design.md`](etl_design.md) §8).
+
+---
+
+## 14. Why more than five tables?
+
+The problem statement asks for *"a highly normalized relational database for the application
+backend (Employees, Departments, Projects, Reviews, Assignments)"*. The five names are the
+**business areas the backend must cover**; "highly normalized" decides how many tables they
+need. This was re-examined during Phase 2 (decision D25) and the 14-table design was kept.
+
+**Every required entity is present**, together with the tables that normalization splits off:
+
+| Required entity | Tables | Why the extra tables exist |
+|---|---|---|
+| Employees | `employees`, `employee_job_history`, `employee_surveys` | Job history is the source of SCD Type 2; surveys are yearly, not one per employee |
+| Departments | `departments`, `department_job_roles` | Which roles exist in which department (an M:N rule, finding F1) |
+| Projects | `projects` | — |
+| Reviews | `performance_reviews`, `performance_rating_levels` | The rating scale and its salary-hike guideline |
+| Assignments | `project_assignments` | — |
+| (reference data) | `job_roles`, `job_levels`, `education_levels`, `education_fields`, `exit_reasons` | Facts about a role, level or reason — storing them on the employee row would create transitive dependencies |
+
+**Could five tables be normalized too?** Yes — normal forms depend on functional dependencies,
+not on the number of tables. But with this 35-column dataset, five tables reach 3NF only by
+storing **less**. Measured on the loaded data:
+
+| What the 14-table design holds | What a five-table design would have to do |
+|---|---|
+| 308,986 job versions (208,986 of them historical; 9,265 department changes) | Keep only the current job: several rows per employee in `employees` would repeat name and birth date on every version (a 2NF violation). The SCD Type 2 history would have to be loaded from staging straight into the warehouse, bypassing the OLTP |
+| 263,417 reviews (57 %) linked to the employee *as they were* at review time | Possible only if the warehouse gets its history from outside the OLTP |
+| 468,646 yearly surveys | Merged into reviews (same employee and year): 6,686 surveys without a review would be lost |
+| Business rules in data: valid department–role pairs, each role's level range, each level's salary band, voluntary vs involuntary exits | Hard-coded CHECK lists or dropped; salary bands and the voluntary flag cannot be stored on the employee row without breaking 3NF |
+| IBM columns rebuilt from the tables at 100 % (lossless decomposition, §5) | Not possible: tenure in role, since promotion and with manager need the history |
+
+**Questions you may be asked**
+
+**Q: The problem statement lists five entities — why does your OLTP have 14 tables?**
+The five are the business areas, and all five are there. "Highly normalized" for a 35-column
+dataset with SCD Type 2 history needs the additional history and reference tables; the mapping
+above shows where each entity lives.
+
+**Q: Wouldn't five tables be simpler?**
+Simpler, yes — but only by dropping the job history, 6,686 surveys and the business rules, and by
+loading the warehouse history from staging instead of from the OLTP, as the ETL requirement
+asks. The extra tables are what make the SCD Type 2 history and its validation possible.
+
+**Q: Does the number of tables slow the application down?**
+No. The application reads through `vw_employee_current` (one employee in 0.01 s) and the
+dashboards read the denormalized star schema, which is exactly why the warehouse exists.

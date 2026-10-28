@@ -6,14 +6,17 @@ credentials in .env differ.
 Usage:
     python scripts/setup_database.py             # run every sql/NN_*.sql file in order
     python scripts/setup_database.py --force     # allow rebuilding even if data is loaded
+    python scripts/setup_database.py --only 03 07 08   # (re)install views and procedures only
 
-Safety: the DDL scripts drop and recreate tables. If any table listed in PROTECTED_TABLES
-already contains rows, the script stops unless --force is given.
+Safety: the DDL scripts drop and recreate tables. If any selected script drops tables and a
+table listed in PROTECTED_TABLES already contains rows, the script stops unless --force is
+given. View and procedure scripts never drop tables, so they can be re-run at any time.
 """
 from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -39,10 +42,13 @@ def split_sql(script: str) -> list[str]:
     """Split a SQL script into statements.
 
     Honours quoted strings, -- / # / /* */ comments, and the client-side
-    DELIMITER directive used around stored-procedure bodies.
+    DELIMITER directive used around stored-procedure bodies. Comments stay in the
+    statement text, so stored procedures keep their comments on the server; a chunk
+    that contains only comments is not a statement.
     """
     statements: list[str] = []
     buf: list[str] = []
+    has_code = False
     delimiter = ";"
     quote: str | None = None
     i, n = 0, len(script)
@@ -72,33 +78,49 @@ def split_sql(script: str) -> list[str]:
 
         if script.startswith("--", i) and (i + 2 >= n or script[i + 2] in " \t\r\n") or ch == "#":
             end = script.find("\n", i)
-            i = n if end == -1 else end + 1
-            buf.append("\n")
+            end = n if end == -1 else end + 1
+            buf.append(script[i:end])
+            i = end
             continue
         if script.startswith("/*", i):
             end = script.find("*/", i + 2)
-            i = n if end == -1 else end + 2
+            end = n if end == -1 else end + 2
+            buf.append(script[i:end])
+            i = end
             continue
         if ch in ("'", '"', "`"):
             quote = ch
             buf.append(ch)
+            has_code = True
             i += 1
             continue
         if script.startswith(delimiter, i):
-            stmt = "".join(buf).strip()
-            if stmt:
-                statements.append(stmt)
-            buf = []
+            if has_code:
+                statements.append("".join(buf).strip())
+            buf, has_code = [], False
             i += len(delimiter)
             continue
 
         buf.append(ch)
+        has_code = has_code or not ch.isspace()
         i += 1
 
-    tail = "".join(buf).strip()
-    if tail:
-        statements.append(tail)
+    if has_code:
+        statements.append("".join(buf).strip())
     return statements
+
+
+def first_code_line(statement: str) -> str:
+    """The first line of a statement that is not a comment (for error messages)."""
+    for line in statement.splitlines():
+        if line.strip() and not line.lstrip().startswith(("--", "#", "/*")):
+            return line.strip()
+    return statement.strip().splitlines()[0]
+
+
+def drops_tables(script: str) -> bool:
+    """True if the script drops tables (the view and procedure scripts do not)."""
+    return re.search(r"\bDROP\s+TABLE\b", script, re.IGNORECASE) is not None
 
 
 def connect():
@@ -136,11 +158,16 @@ def loaded_tables(cur) -> list[str]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--force", action="store_true", help="rebuild even if business data is loaded")
+    parser.add_argument("--only", nargs="+", metavar="NN",
+                        help="run only the scripts with these number prefixes, e.g. --only 07 08")
     args = parser.parse_args()
 
     files = sorted(SQL_DIR.glob("[0-9][0-9]_*.sql"))
+    if args.only:
+        files = [f for f in files if f.name[:2] in args.only]
     if not files:
-        sys.exit(f"No numbered .sql files found in {SQL_DIR}")
+        sys.exit(f"No matching numbered .sql files found in {SQL_DIR}")
+    scripts = {path: path.read_text(encoding="utf-8") for path in files}
 
     conn = connect()
     cur = conn.cursor()
@@ -148,15 +175,16 @@ def main() -> None:
     version, user = cur.fetchone()
     print(f"Connected to MySQL {version} as {user}")
 
-    data = loaded_tables(cur)
-    if data and not args.force:
-        sys.exit("Refusing to rebuild: these tables contain data -> " + ", ".join(data)
-                 + "\nRe-run with --force if you really want to drop and recreate them.")
+    if any(drops_tables(text) for text in scripts.values()):
+        data = loaded_tables(cur)
+        if data and not args.force:
+            sys.exit("Refusing to rebuild: these tables contain data -> " + ", ".join(data)
+                     + "\nRe-run with --force if you really want to drop and recreate them.")
 
     total = 0
     started = time.perf_counter()
-    for path in files:
-        statements = split_sql(path.read_text(encoding="utf-8"))
+    for path, text in scripts.items():
+        statements = split_sql(text)
         t0 = time.perf_counter()
         for stmt in statements:
             try:
@@ -164,8 +192,7 @@ def main() -> None:
                 if cur.with_rows:
                     cur.fetchall()
             except mysql.connector.Error as err:
-                first_line = stmt.strip().splitlines()[0][:100]
-                sys.exit(f"\nFAILED in {path.name}\n  statement: {first_line} ...\n  error: {err}")
+                sys.exit(f"\nFAILED in {path.name}\n  statement: {first_code_line(stmt)[:100]} ...\n  error: {err}")
         total += len(statements)
         print(f"  OK  {path.name:<32} {len(statements):>3} statements  {time.perf_counter() - t0:5.2f}s")
 
