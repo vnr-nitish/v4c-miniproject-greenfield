@@ -2,7 +2,7 @@
 
 An end-to-end, object-oriented HR analytics platform: a Python data synthesizer scales the
 IBM HR Attrition dataset to 100,000+ rows, MySQL holds a normalized OLTP database and a
-star-schema data warehouse (with SCD Type 2 history), and a Streamlit web app provides
+star-schema data warehouse (with SCD Type 2 history), and a Streamlit web app provides 
 data-entry forms and interactive dashboards.
 
 **Live app:** https://v4c-miniproject-greenfield-rvuytjcpc39yzy8xnsjus4.streamlit.app
