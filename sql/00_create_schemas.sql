@@ -4,7 +4,6 @@
 --   hr_staging : raw landing zone for the synthesized data (no constraints)
 --   hr_oltp    : normalized operational database (3NF / BCNF)
 --   hr_dw      : dimensional data warehouse (Kimball star schema)
--- Safe to re-run: existing databases are left untouched.
 -- =============================================================================
 
 CREATE DATABASE IF NOT EXISTS hr_staging
