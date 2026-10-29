@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @pytest.fixture(scope="session")
 def connection():
-    load_dotenv(ROOT / ".env")
+    load_dotenv(os.environ.get("HR_ENV_FILE") or ROOT / ".env", override=True)
     try:
         conn = mysql.connector.connect(
             host=os.environ["DB_HOST"],

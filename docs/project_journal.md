@@ -646,3 +646,18 @@ A free Aiven for MySQL 8.4 service; `sql_require_primary_key` off. Loaded from t
 project's own commands, only `.env` pointing to Aiven: `setup_database.py` (112 statements, 25 s),
 `python -m src.synthesizer.run` (1.85 M rows uploaded, 0 rule violations), `run_etl.py --migrate`.
 `.env` now always overrides stale shell variables (a stale terminal variable had blocked the local app).
+
+## Step 25 — Phase 5: deployment on Streamlit Community Cloud
+
+- **App:** https://v4c-miniproject-greenfield-rvuytjcpc39yzy8xnsjus4.streamlit.app (branch `main`, entry
+  `streamlit_app.py`, which runs `app.py`, because the deploy form failed to accept a changed file name — PR #9).
+  Secrets: database settings, `DB_POOL_SIZE = 3`, `APP_PASSCODE`.
+- **Cloud data:** the warehouse ETL failed on the free Aiven plan after about an hour ("Lost connection"; 1 CPU,
+  32 MB buffer pool), and rolled back cleanly. The finished rows were copied from the local database instead —
+  data only, into the tables and procedures already created on Aiven: 21 tables, all row counts identical
+  (100,000 employees, 308,986 SCD2 versions, 463,015 reviews and facts), 286 s.
+- **Tests:** whole suite **228 / 228** against the local database (`HR_ENV_FILE=.env.local`); UI tests
+  **17 / 17** against Aiven. The cloud run found a real bug: with a passcode set, pages asking for it in
+  several tabs drew the unlock form twice under one key — each form now has its own key, and five tests
+  render every data-entry page with a passcode set. Also found on the empty cloud database: bar charts failed
+  on empty results (fixed in PR #9).

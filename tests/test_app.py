@@ -33,8 +33,20 @@ def test_app_shell_renders():
     assert len(at.sidebar.multiselect) == 3          # department, job level, review cycle filters
 
 
-def test_invalid_onboarding_shows_field_errors():
-    at = AppTest.from_file("../views/onboard.py", default_timeout=180).run()
+@pytest.mark.parametrize("page", ["onboard", "employee_360", "projects", "reviews", "operations"])
+def test_data_entry_pages_are_locked_by_the_passcode(page, monkeypatch):
+    """With APP_PASSCODE set (the public site), every data-entry page renders its unlock form(s)."""
+    monkeypatch.setenv("APP_PASSCODE", "test-passcode")
+    at = AppTest.from_file(f"../views/{page}.py", default_timeout=180).run()
+    assert not at.exception, at.exception
+    assert any("protected" in i.value for i in at.info)
+
+
+def test_invalid_onboarding_shows_field_errors(monkeypatch):
+    monkeypatch.delenv("APP_PASSCODE", raising=False)
+    at = AppTest.from_file("../views/onboard.py", default_timeout=180)
+    at.session_state["editor"] = True                # unlocked, whatever the environment says
+    at.run()
     at.text_input[0].input("Asha2").run()            # invalid first name, other fields empty
     at.button[0].click().run()
     assert not at.exception
