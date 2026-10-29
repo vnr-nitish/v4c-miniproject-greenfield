@@ -25,7 +25,7 @@ with tab_browse:
             project = pm.get(int(found.iloc[event.selection.rows[0]].project_id))
             st.markdown(f"#### {project.project_code} · {project.project_name}")
             st.dataframe(pm.team(project.project_id), hide_index=True, width="stretch")
-            if not project.is_closed and editor_unlocked():
+            if not project.is_closed and editor_unlocked("close"):
                 c1, c2, c3 = st.columns(3)
                 outcome = c1.selectbox("Close as", ["Completed", "Cancelled"])
                 on = c2.date_input("Actual end", date.today(), min_value=project.start_date, max_value=date.today())
@@ -35,7 +35,7 @@ with tab_browse:
                         st.success(f"{closed.project_code} closed; open assignments ended on {on}.")
 
 with tab_create:
-    if editor_unlocked():
+    if editor_unlocked("create"):
         departments = ref.departments()
         department_id = st.selectbox("Owning department", departments.department_id,
                                      format_func=dict(zip(departments.department_id, departments.department_name)).get)
@@ -60,7 +60,7 @@ with tab_create:
                     st.success(f"Project **{created.project_code}** created.")
 
 with tab_assign:
-    if editor_unlocked():
+    if editor_unlocked("assign"):
         open_projects = attempt(lambda: pm.search(status="Active", limit=500))
         if open_projects is not None and len(open_projects):
             with st.form("assign"):

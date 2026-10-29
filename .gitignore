@@ -20,3 +20,7 @@ data/synthesized/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Other local settings files (keep .env.example)
+.env.*
+!.env.example

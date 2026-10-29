@@ -5,8 +5,8 @@ IBM HR Attrition dataset to 100,000+ rows, MySQL holds a normalized OLTP databas
 star-schema data warehouse (with SCD Type 2 history), and a Streamlit web app provides
 data-entry forms and interactive dashboards.
 
-> 🚧 Work in progress. Full architecture, setup and data-warehousing documentation will be
-> added as each phase is completed.
+**Live app:** https://v4c-miniproject-greenfield-rvuytjcpc39yzy8xnsjus4.streamlit.app
+(data entry needs the editor passcode; the dashboards are public).
 
 ## Tech stack
 Python 3.11 (OOP, pandas, Faker) · MySQL 8 · Streamlit · Plotly · draw.io · GitHub · Streamlit Community Cloud
@@ -82,11 +82,13 @@ entry on a public deployment. Design: [`docs/ui_design.md`](docs/ui_design.md).
 ## Deploy (Streamlit Community Cloud + Aiven MySQL)
 1. **Cloud database:** a free [Aiven for MySQL](https://console.aiven.io/signup) service (real MySQL 8 — the
    stored procedures need it). In *Advanced configuration* set `mysql.sql_require_primary_key = off`.
-2. **Load it from a laptop:** put the Aiven host, port, user and password in `.env`, then run the same three
-   commands as locally: `python scripts/setup_database.py`, `python -m src.synthesizer.run`,
-   `python scripts/run_etl.py --migrate`.
+2. **Load it from a laptop:** with the Aiven settings in `.env`, run `python scripts/setup_database.py` and
+   `python -m src.synthesizer.run`. The free plan (1 CPU, 32 MB buffer pool) could not finish the hour-long
+   migration transaction, so the finished OLTP and warehouse rows were copied from the local database
+   (`mysqldump --no-create-info` → `mysql`) and verified table by table — identical data, seed 42.
+   Tests against another settings file: `HR_ENV_FILE=.env.local python -m pytest`.
 3. **App:** [share.streamlit.io](https://share.streamlit.io) → *Create app* → this repository, branch `main`,
-   file `app.py`, Python 3.11 → *Advanced settings → Secrets*:
+   file `streamlit_app.py` (runs `app.py`), Python 3.11 → *Advanced settings → Secrets*:
    ```toml
    DB_HOST = "mysql-xxxxxxxx.aivencloud.com"
    DB_PORT = "12345"
@@ -113,7 +115,7 @@ Design, OOP principles and decisions: [`docs/backend_design.md`](docs/backend_de
 python -m pytest -q                        # everything (needs MySQL with the ETL loaded)
 python -m pytest tests/test_models.py -q   # entity rules only — no database needed
 ```
-223 tests, about 6 minutes. Database tests run inside rolled-back transactions — they use the real
+228 tests, about 5 minutes. Database tests run inside rolled-back transactions — they use the real
 data and never change it; they skip themselves when MySQL or the loaded data is missing.
 
 ## Design documentation

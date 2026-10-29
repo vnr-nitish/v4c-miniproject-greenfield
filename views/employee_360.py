@@ -43,7 +43,7 @@ with tab_path:
     st.dataframe(history, hide_index=True, width="stretch")
 
 with tab_change:
-    if employee.is_active and editor_unlocked():
+    if employee.is_active and editor_unlocked("change"):
         current = em.current_position(employee.employee_id)
         new = position_picker(f"change_{employee.employee_id}", current)
         c1, c2 = st.columns(2)
@@ -75,7 +75,7 @@ with tab_more:
     st.dataframe(ProjectManager().assignments_for(employee.employee_id), hide_index=True, width="stretch")
     if employee.is_active:
         with st.expander("Record an exit"):
-            if editor_unlocked():
+            if editor_unlocked("exit"):
                 reasons = ReferenceDataManager().exit_reasons()
                 with st.form("exit"):
                     exit_date = st.date_input("Exit date", date.today(), max_value=date.today())

@@ -65,8 +65,9 @@ def _configured_passcode() -> str | None:
         return None
 
 
-def editor_unlocked() -> bool:
-    """Data entry is protected by a passcode when APP_PASSCODE is configured (the public site)."""
+def editor_unlocked(place: str = "main") -> bool:
+    """Data entry is protected by a passcode when APP_PASSCODE is configured (the public site).
+    `place` names the spot on the page, so a page can ask in several tabs (each form needs its own key)."""
     code = _configured_passcode()
     if not code:
         st.caption("🔓 Data entry is open — no APP_PASSCODE is configured (local development).")
@@ -74,7 +75,7 @@ def editor_unlocked() -> bool:
     if st.session_state.get("editor"):
         return True
     st.info("Data entry is protected on the public site; the dashboards are open to everyone.")
-    with st.form("unlock"):
+    with st.form(f"unlock_{place}"):
         entered = st.text_input("Editor passcode", type="password")
         if st.form_submit_button("Unlock data entry"):
             if hmac.compare_digest(entered.encode(), code.encode()):
