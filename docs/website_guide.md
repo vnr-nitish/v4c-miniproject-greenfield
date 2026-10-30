@@ -60,16 +60,101 @@ Dashboards are open to everyone. Locally (no passcode configured) everything is 
 
 ## 3. Command centre (Overview)
 
-| Element | What it shows | Source |
-|---|---|---|
-| Headline tiles | Active headcount; attrition of the latest complete fiscal year; average rating and KPI of the latest review cycle; outstanding share; open and overdue projects | `AnalyticsManager.overview()` |
-| ▲ / ▼ under a tile | Change against the previous year — **green = good, red = bad** (for attrition a fall is green) | `LAG()` in `yoy_trends()` / `attrition_trend()` |
-| Treemap | Headcount by department → job role; **colour** = share of employees at High / Very high risk. Click a block to zoom in, click the top bar to zoom out | `scored_workforce()` |
-| Donut | How many employees are in each risk band (green → red) | same |
-| Bars | Headcount per department | same |
+The page answers "how is the company doing right now?". Every number is read from the
+**warehouse** (`hr_dw`) through `AnalyticsManager.overview()`, and every one follows the sidebar
+filters. Numbers below are from the live site on 30 October 2026.
 
-*Active headcount* counts people who have not left: 83,878 of the 100,000 employees; 16,122
-(16.1 %, as in the IBM data) left between 2019 and June 2026 and remain in the database for history.
+### How to read the arrows
+
+Some tiles show a line such as **▼ -0.08 vs previous year**:
+- **▲ / ▼** = the value went up / down compared with the previous year (computed in SQL with `LAG()`).
+- **Green** = the change is good, **red** = the change is bad. Good depends on the measure: a *fall* in
+  attrition is green, a *rise* in rating or KPI is green.
+- Tiles without an arrow have no year-on-year comparison.
+
+### The tiles, one by one
+
+**ACTIVE HEADCOUNT — 83,880**
+- *Meaning:* how many people work for the company **today** (they have not left).
+- *Calculation:* the number of employees whose **current** warehouse version has no exit date:
+  `COUNT(*) FROM dim_employee WHERE is_current = 1 AND exit_date IS NULL`.
+- *Why not 100,000:* 100,000 people have ever been employed; 16,122 of them (16.1 %, the IBM
+  dataset's attrition rate) left between January 2019 and June 2026. They stay in the database
+  because their history and reviews are still needed. The number rises by one for every employee
+  onboarded through the site (83,878 → 83,880 after two test hires) and falls with every exit recorded.
+
+**ATTRITION FY2025-26 — 2.59 %, ▼ -0.08 vs previous year (green)**
+- *Meaning:* the share of the workforce that left during the **latest complete fiscal year**
+  (Indian FY, 1 April 2025 – 31 March 2026).
+- *Calculation:* leavers ÷ average headcount × 100, where
+  - leavers = employees whose exit date falls in the fiscal year = **2,153**;
+  - average headcount = (headcount on 1 April 2025 + headcount on 31 March 2026) ÷ 2
+    = (82,632 + 83,835) ÷ 2 = **83,233.5**;
+  - 2,153 ÷ 83,233.5 × 100 = **2.59 %**.
+- Headcounts are **point-in-time** through SCD Type 2: each person is counted with the job version
+  that was valid on that day (so a department filter counts people in the department they were in
+  *then*).
+- *The arrow:* FY2024-25 was 2.67 %, so 2.59 − 2.67 = **-0.08 points** — fewer people left, therefore green.
+- Why it declines over the years: the number of leavers stays at about 2,150 a year while the
+  company grows (deferred item D3).
+
+**AVG RATING FY2025-26 — 3.155, ▲ +0.003 vs previous year (green)**
+- *Meaning:* the average performance rating of the **latest review cycle**. FY2025-26 holds the
+  reviews of performance year 2025, held between January and March 2026 (83,188 reviews).
+- *Calculation:* `AVG(performance_rating)` over the fact rows (`fact_performance_reviews`) whose
+  review date falls in that fiscal year.
+- *Scale:* 1 Low, 2 Good, 3 Excellent, 4 Outstanding. Like the IBM data, the generated reviews use
+  only 3 and 4, so the average is simply **3 + the share of outstanding ratings**:
+  3 + 0.155 = 3.155.
+- *The arrow:* FY2024-25 averaged 3.151; the difference (from the unrounded values) is +0.003.
+
+**AVG KPI SCORE — 80.12, ▲ +0.03 vs previous year (green)**
+- *Meaning:* the average KPI score (0–100, an objective performance measure recorded with each
+  review) in the same latest cycle, FY2025-26.
+- *Calculation:* `AVG(kpi_score)` over the same 83,188 reviews.
+- *How KPI relates to the rating:* it is correlated with the rating but not determined by it
+  (outstanding reviews score around 92, excellent ones around 78).
+- *The arrow:* 80.12 against about 80.09 a year earlier: +0.03.
+
+**OUTSTANDING REVIEWS — 15.5 %**
+- *Meaning:* the share of the latest cycle's reviews rated **4 · Outstanding**.
+- *Calculation:* outstanding reviews ÷ all reviews in FY2025-26 × 100 = 15.5 %
+  (`100 × AVG(performance_rating = 4)`). It is the same information as the rating tile seen from
+  the other side: 15.5 % outstanding ⇒ average 3.155.
+
+**OPEN PROJECTS — 332**
+- *Meaning:* projects that are not finished: status **Planned, Active or On Hold**.
+- *Calculation:* `COUNT` of `dim_project` rows with one of those statuses (the special
+  "No Project" row is excluded). The other projects are Completed or Cancelled.
+- *When it changes:* projects created or closed on the Projects page are counted after the next
+  **Run warehouse ETL** (the warehouse is loaded in batches).
+
+**OVERDUE PROJECTS — 89**
+- *Meaning:* open projects whose **planned end date has already passed** — late projects.
+- *Calculation:* open projects (as above) with `planned_end_date < today`.
+- *Why it grows by itself:* "today" moves every day, so an open project becomes overdue the day
+  after its planned end (it was 87 a few days earlier). It falls when a project is closed.
+- The Project bottlenecks page shows which projects these are and how late each one is.
+
+### The charts
+
+**Headcount by department and role (treemap)**
+- Each rectangle is a group of active employees: the outer blocks are departments, the inner ones
+  job roles. **Size** = number of people (e.g. Research Scientist 16,667).
+- **Colour** = the share of that group at **High or Very high** attrition risk (scale on the right:
+  green ≈ low, yellow, orange, red ≈ high). Research Scientists are red because many are entry
+  level without stock options; Manufacturing Directors are yellow-green.
+- Click a block to zoom into it, click the top bar ("Company") to zoom out.
+
+**Attrition-risk bands (donut)**
+- How the active employees split over the four risk bands: Low (green), Medium (blue), High
+  (amber), Very high (red). The percentages are each band's share of the active headcount
+  (e.g. 55.6 % Medium, 31.8 % Low).
+- The band comes from each person's risk score (0–14 points from 11 work-related factors; see
+  the Attrition risk page).
+
+**Headcount by department (bars)**
+- Active employees per department, with the number on each bar.
 
 ## 4. Onboard employee
 
