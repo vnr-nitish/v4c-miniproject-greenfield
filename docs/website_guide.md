@@ -161,6 +161,14 @@ fall in India's fiscal year **FY2025-26** (1 April 2025 – 31 March 2026), so t
   level without stock options; Manufacturing Directors are yellow-green.
 - Click a block to zoom into it, click the top bar ("Company") to zoom out.
 
+**Active employees by years at the company (stacked bars)**
+- Each bar is a tenure group (under 1 year, 1, 2, 3–4, 5–9, 10–19, 20+ years); its height is the
+  number of active employees in it, split by risk band (green Low → red Very high).
+- *Calculation:* each person's years at the company = full years from the hire date to today;
+  people are counted per group and band.
+- *What it shows:* the red and amber parts are largest in the first two years — new joiners carry
+  most of the attrition risk (the "less than 2 years" factor, and entry-level jobs without stock).
+
 **Attrition-risk bands (donut)**
 - How the active employees split over the four risk bands: Low (green), Medium (blue), High
   (amber), Very high (red). The percentages are each band's share of the active headcount
