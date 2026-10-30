@@ -5,7 +5,7 @@ import streamlit as st
 
 from src.dal import EmployeeManager, ReferenceDataManager
 from src.models import Employee, Position
-from src.ui.common import attempt, editor_unlocked, page_header
+from src.ui.common import attempt, data_changed, editor_unlocked, page_header
 from src.ui.forms import position_picker
 
 page_header("Onboard an employee", "Validated as you go; the new hire appears in the warehouse immediately")
@@ -45,6 +45,7 @@ if submitted:
         return EmployeeManager().onboard(employee, Position(**position))
     hired = attempt(onboard)
     if hired:
+        data_changed()
         st.success(f"Welcome aboard, {hired.full_name} — employee code **{hired.employee_code}**.")
         st.balloons()
         st.markdown("Warehouse row created in the same transaction (`dim_employee`, SCD Type 2 version 1):")

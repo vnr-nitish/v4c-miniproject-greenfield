@@ -9,6 +9,12 @@ from src.dal import ReferenceDataManager
 from src.models import Position
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _manager_candidates(department_id: int, min_level: int):
+    """Cached for 5 minutes: the query reads the 100K-row current-employee view (~2 s on the cloud)."""
+    return ReferenceDataManager().manager_candidates(department_id, min_level)
+
+
 def position_picker(key: str, current: Position | None = None) -> dict:
     """Department -> only the roles it offers -> only the levels the role allows -> pay inside the
     level's band -> a manager from that department. Outside a form, so each choice narrows the next."""
@@ -35,7 +41,7 @@ def position_picker(key: str, current: Position | None = None) -> dict:
     c4, c5, c6 = st.columns(3)
     income = c4.slider("Monthly income (inside the level's band)", low, high, default, step=50,
                        key=f"{key}_pay_{job_level_id}")
-    candidates = ref.manager_candidates(department_id, min_level=min(job_level_id + 1, 5))
+    candidates = _manager_candidates(int(department_id), min(job_level_id + 1, 5))
     manager_ids = [None] + candidates.employee_id.tolist()
     names = dict(zip(candidates.employee_id, candidates.full_name + " · L" + candidates.job_level.astype(str)))
     manager_id = c5.selectbox("Manager", manager_ids, key=f"{key}_mgr_{department_id}_{job_level_id}",

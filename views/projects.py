@@ -8,6 +8,7 @@ from src.dal import EmployeeManager, ProjectManager, ReferenceDataManager
 from src.exceptions import OverAllocationError
 from src.models import Assignment, Project
 from src.ui.common import attempt, editor_unlocked, page_header
+from src.ui.forms import _manager_candidates
 
 page_header("Projects", "Create projects, staff them and close them — new projects reach the warehouse on the next ETL run")
 pm, ref = ProjectManager(), ReferenceDataManager()
@@ -39,7 +40,7 @@ with tab_create:
         departments = ref.departments()
         department_id = st.selectbox("Owning department", departments.department_id,
                                      format_func=dict(zip(departments.department_id, departments.department_name)).get)
-        managers = ref.manager_candidates(int(department_id), min_level=3)
+        managers = _manager_candidates(int(department_id), 3)
         with st.form("create_project"):
             c1, c2 = st.columns(2)
             name = c1.text_input("Project name")
