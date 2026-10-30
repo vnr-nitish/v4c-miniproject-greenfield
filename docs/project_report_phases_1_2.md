@@ -494,3 +494,467 @@ update share **one transaction** (E3).
 - re-running the ETL changes nothing; a department change creates exactly one new version.
 
 The whole project's test suite (Phases 1–5) has **228 tests, all passing**.
+
+---
+
+## Appendix — Complete schema reference
+
+Generated from MySQL's own catalogue (`information_schema`), so it matches the database exactly. **PK** = primary key · **FK → table.column** = foreign key (the connection to another table) · **UQ** = unique · *generated* = computed by the database. Types: TINYINT/SMALLINT/INT = whole numbers of increasing size, DECIMAL = exact money / scores, VARCHAR(n) = text up to n characters, CHAR(n) = fixed-length text, DATE / DATETIME = dates, TINYINT(1) = yes/no flag.
+
+### OLTP database `hr_oltp` (14 tables)
+
+**`department_job_roles`** — Valid department-role pairs; resolves the M:N relationship (finding F1)
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| department_id | tinyint unsigned | no | PK · FK → departments.department_id |
+| job_role_id | tinyint unsigned | no | PK · FK → job_roles.job_role_id |
+
+**`departments`** — Organizational departments
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| department_id | tinyint unsigned | no | PK · auto-increment |
+| department_code | varchar(10) | no | UQ |
+| department_name | varchar(60) | no | UQ |
+
+**`education_fields`** — Field of study
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| education_field_id | tinyint unsigned | no | PK · auto-increment |
+| field_name | varchar(60) | no | UQ |
+
+**`education_levels`** — Education level (1 Below College ... 5 Doctor)
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| education_level_id | tinyint unsigned | no | PK |
+| level_name | varchar(30) | no | UQ |
+
+**`employee_job_history`** — Effective-dated job versions; single source of truth for SCD Type 2
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| history_id | int unsigned | no | PK · auto-increment |
+| employee_id | int unsigned | no | UQ (employee_id, effective_start_date) · FK → employees.employee_id |
+| department_id | tinyint unsigned | no | FK → department_job_roles.department_id |
+| job_role_id | tinyint unsigned | no | FK → department_job_roles.job_role_id |
+| job_level_id | tinyint unsigned | no | FK → job_levels.job_level_id |
+| manager_id | int unsigned | yes | FK → employees.employee_id |
+| monthly_income | decimal(10,2) | no |  |
+| stock_option_level | tinyint unsigned | no |  |
+| business_travel | varchar(20) | no |  |
+| change_reason | varchar(20) | no |  |
+| effective_start_date | date | no | UQ (employee_id, effective_start_date) |
+| effective_end_date | date | yes |  |
+| current_version_key | int unsigned | yes | UQ · *generated* |
+| created_at | datetime | no | default: time of insert |
+
+**`employee_surveys`** — Yearly engagement survey (scales 1-4)
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| survey_id | int unsigned | no | PK · auto-increment |
+| employee_id | int unsigned | no | UQ (employee_id, survey_year) · FK → employees.employee_id |
+| survey_date | date | no |  |
+| survey_year | smallint unsigned | yes | UQ (employee_id, survey_year) · *generated* |
+| environment_satisfaction | tinyint unsigned | no |  |
+| job_satisfaction | tinyint unsigned | no |  |
+| relationship_satisfaction | tinyint unsigned | no |  |
+| job_involvement | tinyint unsigned | no |  |
+| work_life_balance | tinyint unsigned | no |  |
+| created_at | datetime | no | default: time of insert |
+
+**`employees`** — The person. Job data lives in employee_job_history.
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| employee_id | int unsigned | no | PK · auto-increment |
+| employee_code | char(9) | no | UQ |
+| first_name | varchar(50) | no |  |
+| last_name | varchar(50) | no |  |
+| email | varchar(120) | no | UQ |
+| phone | varchar(20) | no |  |
+| gender | varchar(10) | no |  |
+| date_of_birth | date | no |  |
+| marital_status | varchar(10) | no |  |
+| education_level_id | tinyint unsigned | no | FK → education_levels.education_level_id |
+| education_field_id | tinyint unsigned | no | FK → education_fields.education_field_id |
+| distance_from_home_km | tinyint unsigned | no |  |
+| prior_experience_years | tinyint unsigned | no |  |
+| prior_companies_count | tinyint unsigned | no |  |
+| hire_date | date | no |  |
+| exit_date | date | yes |  |
+| exit_reason_id | tinyint unsigned | yes | FK → exit_reasons.exit_reason_id |
+| is_active | tinyint(1) | yes | *generated* |
+| created_at | datetime | no | default: time of insert |
+| updated_at | datetime | no | default: time of insert |
+
+**`exit_reasons`** — Why an employee left; separates voluntary from involuntary attrition
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| exit_reason_id | tinyint unsigned | no | PK · auto-increment |
+| reason_name | varchar(60) | no | UQ |
+| is_voluntary | tinyint(1) | no |  |
+
+**`job_levels`** — Seniority levels with monthly salary bands (finding F3)
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| job_level_id | tinyint unsigned | no | PK |
+| level_title | varchar(30) | no | UQ |
+| salary_band_min | decimal(10,2) | no |  |
+| salary_band_max | decimal(10,2) | no |  |
+
+**`job_roles`** — Job roles with their allowed level range (finding F2)
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| job_role_id | tinyint unsigned | no | PK · auto-increment |
+| role_name | varchar(60) | no | UQ |
+| min_job_level_id | tinyint unsigned | no | FK → job_levels.job_level_id |
+| max_job_level_id | tinyint unsigned | no | FK → job_levels.job_level_id |
+
+**`performance_rating_levels`** — Performance rating scale with salary-hike guideline (findings F4, F12)
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| rating_id | tinyint unsigned | no | PK |
+| rating_label | varchar(20) | no | UQ |
+| hike_min_pct | decimal(5,2) | no |  |
+| hike_max_pct | decimal(5,2) | no |  |
+
+**`performance_reviews`** — One annual performance review per employee
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| review_id | int unsigned | no | PK · auto-increment |
+| employee_id | int unsigned | no | UQ (employee_id, review_year) · FK → employees.employee_id |
+| review_year | smallint unsigned | no | UQ (employee_id, review_year) |
+| review_date | date | no |  |
+| reviewer_id | int unsigned | no | FK → employees.employee_id |
+| project_id | smallint unsigned | yes | FK → projects.project_id |
+| rating_id | tinyint unsigned | no | FK → performance_rating_levels.rating_id |
+| kpi_score | decimal(5,2) | no |  |
+| training_sessions | tinyint unsigned | no |  |
+| overtime_flag | tinyint(1) | no |  |
+| comments | varchar(500) | yes |  |
+| created_at | datetime | no | default: time of insert |
+
+**`project_assignments`** — Employee-to-project allocation (resolves M:N)
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| assignment_id | int unsigned | no | PK · auto-increment |
+| employee_id | int unsigned | no | UQ (employee_id, project_id, start_date) · FK → employees.employee_id |
+| project_id | smallint unsigned | no | UQ (employee_id, project_id, start_date) · FK → projects.project_id |
+| project_role | varchar(30) | no |  |
+| allocation_pct | tinyint unsigned | no |  |
+| start_date | date | no | UQ (employee_id, project_id, start_date) |
+| end_date | date | yes |  |
+| created_at | datetime | no | default: time of insert |
+
+**`projects`** — Projects; planned vs actual end enables delay analysis
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| project_id | smallint unsigned | no | PK · auto-increment |
+| project_code | char(8) | no | UQ |
+| project_name | varchar(120) | no |  |
+| description | varchar(500) | yes |  |
+| department_id | tinyint unsigned | no | FK → departments.department_id |
+| project_manager_id | int unsigned | yes | FK → employees.employee_id |
+| start_date | date | no |  |
+| planned_end_date | date | no |  |
+| actual_end_date | date | yes |  |
+| budget | decimal(14,2) | no |  |
+| status | varchar(15) | no |  |
+| priority | varchar(10) | no |  |
+| created_at | datetime | no | default: time of insert |
+| updated_at | datetime | no | default: time of insert |
+
+### Data warehouse `hr_dw` (star schema + ETL log)
+
+**`dim_date`** — Calendar and Indian fiscal-year attributes, 2015-2030
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| date_sk | int | no | PK |
+| full_date | date | no | UQ |
+| day_of_month | tinyint unsigned | no |  |
+| day_name | varchar(9) | no |  |
+| day_of_week | tinyint unsigned | no |  |
+| is_weekend | tinyint(1) | no |  |
+| week_of_year | tinyint unsigned | no |  |
+| month_number | tinyint unsigned | no |  |
+| month_name | varchar(9) | no |  |
+| quarter_number | tinyint unsigned | no |  |
+| quarter_label | char(2) | no |  |
+| calendar_year | smallint unsigned | no |  |
+| year_month_label | char(7) | no |  |
+| fiscal_year | char(9) | no |  |
+| fiscal_quarter | char(2) | no |  |
+
+**`dim_department`** — SCD Type 1
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| department_sk | int | no | PK · auto-increment |
+| department_id | tinyint unsigned | no | UQ |
+| department_code | varchar(10) | no |  |
+| department_name | varchar(60) | no |  |
+| updated_at | datetime | no | default: time of insert |
+
+**`dim_employee`** — SCD Type 2 employee dimension
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| employee_sk | int | no | PK · auto-increment |
+| employee_id | int unsigned | no | UQ (employee_id, start_date) · UQ (employee_id, version_number) |
+| employee_code | char(9) | no |  |
+| full_name | varchar(101) | no |  |
+| gender | varchar(10) | no |  |
+| date_of_birth | date | no |  |
+| marital_status | varchar(10) | no |  |
+| education_level | varchar(30) | no |  |
+| education_field | varchar(60) | no |  |
+| distance_from_home_km | tinyint unsigned | no |  |
+| prior_experience_years | tinyint unsigned | no |  |
+| prior_companies_count | tinyint unsigned | no |  |
+| hire_date | date | no |  |
+| exit_date | date | yes |  |
+| exit_reason | varchar(60) | yes |  |
+| is_voluntary_exit | tinyint(1) | yes |  |
+| attrition_flag | tinyint(1) | no |  |
+| department_code | varchar(10) | no |  |
+| department_name | varchar(60) | no |  |
+| job_role | varchar(60) | no |  |
+| job_level | tinyint unsigned | no |  |
+| job_level_title | varchar(30) | no |  |
+| manager_employee_id | int unsigned | yes |  |
+| manager_name | varchar(101) | yes |  |
+| monthly_income | decimal(10,2) | no |  |
+| salary_band | varchar(20) | no |  |
+| stock_option_level | tinyint unsigned | no |  |
+| business_travel | varchar(20) | no |  |
+| change_reason | varchar(20) | no |  |
+| start_date | date | no | UQ (employee_id, start_date) |
+| end_date | date | no |  |
+| is_current | tinyint(1) | no |  |
+| version_number | smallint unsigned | no | UQ (employee_id, version_number) |
+| row_hash | char(32) | no |  |
+| current_version_key | int unsigned | yes | UQ · *generated* |
+| etl_batch_id | int | no |  |
+| loaded_at | datetime | no | default: time of insert |
+| updated_at | datetime | no | default: time of insert |
+
+**`dim_project`** — SCD Type 1, flattened; special member (sk -1, id 0) for reviews without a project
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| project_sk | int | no | PK · auto-increment |
+| project_id | smallint unsigned | no | UQ |
+| project_code | char(8) | no |  |
+| project_name | varchar(120) | no |  |
+| owning_department_name | varchar(60) | no |  |
+| project_manager_name | varchar(101) | yes |  |
+| start_date | date | yes |  |
+| planned_end_date | date | yes |  |
+| actual_end_date | date | yes |  |
+| planned_duration_days | smallint | yes |  |
+| delay_days | smallint | yes |  |
+| is_delayed | tinyint(1) | yes |  |
+| status | varchar(15) | no |  |
+| priority | varchar(10) | no |  |
+| budget | decimal(14,2) | yes |  |
+| budget_band | varchar(20) | no |  |
+| updated_at | datetime | no | default: time of insert |
+
+**`etl_batch_log`** — One row per ETL step per run
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| log_id | int | no | PK · auto-increment |
+| batch_id | int | no |  |
+| step_name | varchar(60) | no |  |
+| rows_affected | int | no |  |
+| status | varchar(10) | no |  |
+| message | varchar(500) | yes |  |
+| started_at | datetime | no | default: time of insert |
+| finished_at | datetime | yes |  |
+
+**`etl_rejected_rows`** — Source rows the ETL could not load, with the reason
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| reject_id | int | no | PK · auto-increment |
+| batch_id | int | no |  |
+| source_table | varchar(60) | no |  |
+| source_key | varchar(60) | no |  |
+| reason | varchar(255) | no |  |
+| rejected_at | datetime | no | default: time of insert |
+
+**`fact_performance_reviews`** — Grain: one row per performance review
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| review_id | int unsigned | no | PK |
+| date_sk | int | no | FK → dim_date.date_sk |
+| employee_sk | int | no | FK → dim_employee.employee_sk |
+| department_sk | int | no | FK → dim_department.department_sk |
+| project_sk | int | no | FK → dim_project.project_sk |
+| performance_rating | tinyint unsigned | no |  |
+| kpi_score | decimal(5,2) | no |  |
+| training_sessions | tinyint unsigned | no |  |
+| overtime_flag | tinyint unsigned | no |  |
+| monthly_income_at_review | decimal(10,2) | no |  |
+| environment_satisfaction | tinyint unsigned | yes |  |
+| job_satisfaction | tinyint unsigned | yes |  |
+| relationship_satisfaction | tinyint unsigned | yes |  |
+| work_life_balance | tinyint unsigned | yes |  |
+| job_involvement | tinyint unsigned | yes |  |
+| etl_batch_id | int | no |  |
+| loaded_at | datetime | no | default: time of insert |
+
+### Staging `hr_staging` (raw landing zone, no constraints)
+
+**`stg_assignments`** — Project assignments (raw)
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| stg_row_id | int unsigned | no | PK · auto-increment |
+| batch_id | int | no |  |
+| employee_code | varchar(12) | yes |  |
+| project_code | varchar(12) | yes |  |
+| project_role | varchar(30) | yes |  |
+| allocation_pct | int | yes |  |
+| start_date | date | yes |  |
+| end_date | date | yes |  |
+| loaded_at | datetime | no | default: time of insert |
+
+**`stg_employees`** — Scaled IBM dataset (raw, unvalidated)
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| stg_row_id | int unsigned | no | PK · auto-increment |
+| batch_id | int | no |  |
+| source_employee_number | int | yes |  |
+| employee_code | varchar(12) | yes |  |
+| first_name | varchar(50) | yes |  |
+| last_name | varchar(50) | yes |  |
+| email | varchar(120) | yes |  |
+| phone | varchar(25) | yes |  |
+| date_of_birth | date | yes |  |
+| hire_date | date | yes |  |
+| exit_date | date | yes |  |
+| exit_reason | varchar(60) | yes |  |
+| age | int | yes |  |
+| attrition | varchar(5) | yes |  |
+| business_travel | varchar(25) | yes |  |
+| daily_rate | int | yes |  |
+| department | varchar(60) | yes |  |
+| distance_from_home | int | yes |  |
+| education | int | yes |  |
+| education_field | varchar(60) | yes |  |
+| employee_count | int | yes |  |
+| environment_satisfaction | int | yes |  |
+| gender | varchar(10) | yes |  |
+| hourly_rate | int | yes |  |
+| job_involvement | int | yes |  |
+| job_level | int | yes |  |
+| job_role | varchar(60) | yes |  |
+| job_satisfaction | int | yes |  |
+| marital_status | varchar(15) | yes |  |
+| monthly_income | decimal(10,2) | yes |  |
+| monthly_rate | int | yes |  |
+| num_companies_worked | int | yes |  |
+| over18 | varchar(3) | yes |  |
+| over_time | varchar(5) | yes |  |
+| percent_salary_hike | int | yes |  |
+| performance_rating | int | yes |  |
+| relationship_satisfaction | int | yes |  |
+| standard_hours | int | yes |  |
+| stock_option_level | int | yes |  |
+| total_working_years | int | yes |  |
+| training_times_last_year | int | yes |  |
+| work_life_balance | int | yes |  |
+| years_at_company | int | yes |  |
+| years_in_current_role | int | yes |  |
+| years_since_last_promotion | int | yes |  |
+| years_with_curr_manager | int | yes |  |
+| loaded_at | datetime | no | default: time of insert |
+
+**`stg_job_history`** — Job versions (raw)
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| stg_row_id | int unsigned | no | PK · auto-increment |
+| batch_id | int | no |  |
+| employee_code | varchar(12) | yes |  |
+| version_number | int | yes |  |
+| department | varchar(60) | yes |  |
+| job_role | varchar(60) | yes |  |
+| job_level | int | yes |  |
+| manager_code | varchar(12) | yes |  |
+| monthly_income | decimal(10,2) | yes |  |
+| stock_option_level | int | yes |  |
+| business_travel | varchar(25) | yes |  |
+| change_reason | varchar(25) | yes |  |
+| effective_start_date | date | yes |  |
+| effective_end_date | date | yes |  |
+| loaded_at | datetime | no | default: time of insert |
+
+**`stg_projects`** — Projects (raw)
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| stg_row_id | int unsigned | no | PK · auto-increment |
+| batch_id | int | no |  |
+| project_code | varchar(12) | yes |  |
+| project_name | varchar(120) | yes |  |
+| description | varchar(500) | yes |  |
+| department | varchar(60) | yes |  |
+| project_manager_code | varchar(12) | yes |  |
+| start_date | date | yes |  |
+| planned_end_date | date | yes |  |
+| actual_end_date | date | yes |  |
+| budget | decimal(14,2) | yes |  |
+| status | varchar(15) | yes |  |
+| priority | varchar(10) | yes |  |
+| loaded_at | datetime | no | default: time of insert |
+
+**`stg_reviews`** — Performance reviews (raw)
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| stg_row_id | int unsigned | no | PK · auto-increment |
+| batch_id | int | no |  |
+| employee_code | varchar(12) | yes |  |
+| review_year | int | yes |  |
+| review_date | date | yes |  |
+| reviewer_code | varchar(12) | yes |  |
+| project_code | varchar(12) | yes |  |
+| performance_rating | int | yes |  |
+| kpi_score | decimal(5,2) | yes |  |
+| training_sessions | int | yes |  |
+| over_time | varchar(5) | yes |  |
+| comments | varchar(500) | yes |  |
+| loaded_at | datetime | no | default: time of insert |
+
+**`stg_surveys`** — Engagement surveys (raw)
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| stg_row_id | int unsigned | no | PK · auto-increment |
+| batch_id | int | no |  |
+| employee_code | varchar(12) | yes |  |
+| survey_date | date | yes |  |
+| environment_satisfaction | int | yes |  |
+| job_satisfaction | int | yes |  |
+| relationship_satisfaction | int | yes |  |
+| job_involvement | int | yes |  |
+| work_life_balance | int | yes |  |
+| loaded_at | datetime | no | default: time of insert |
+
