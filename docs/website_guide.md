@@ -72,6 +72,14 @@ Some tiles show a line such as **▼ -0.08 vs previous year**:
   attrition is green, a *rise* in rating or KPI is green.
 - Tiles without an arrow have no year-on-year comparison.
 
+### What a "review cycle" is
+
+Once a year every employee receives **one performance review covering the previous year**:
+performance year **2025** is reviewed between **15 January and 15 March 2026**. Those review dates
+fall in India's fiscal year **FY2025-26** (1 April 2025 – 31 March 2026), so the cycle is labelled
+**FY2025-26**. The database holds seven cycles, FY2019-20 to FY2025-26 (performance years
+2019–2025); the latest, FY2025-26, has 83,188 reviews. "Latest cycle" on a tile means FY2025-26.
+
 ### The tiles, one by one
 
 **ACTIVE HEADCOUNT — 83,880**
@@ -112,8 +120,15 @@ Some tiles show a line such as **▼ -0.08 vs previous year**:
 - *Meaning:* the average KPI score (0–100, an objective performance measure recorded with each
   review) in the same latest cycle, FY2025-26.
 - *Calculation:* `AVG(kpi_score)` over the same 83,188 reviews.
-- *How KPI relates to the rating:* it is correlated with the rating but not determined by it
-  (outstanding reviews score around 92, excellent ones around 78).
+- *What a KPI score is:* a 0–100 number on every review — how much of their targets the employee
+  achieved (objective), next to the rating (the manager's judgement).
+- *Where each KPI value comes from:*
+  - **Generated reviews** (the 100K history; the IBM data has no KPI): the synthesizer draws a value
+    that fits the rating — rating 4 → around **92** (spread ±4, always 85–100); rating 3 → around
+    **78** (±7, 60–95); values outside the range are drawn again, not cut off, so none pile up at 100.
+  - **Reviews entered on the site:** the reviewer types the KPI in the review form.
+- *Why the average is about 80:* 84.5 % of the cycle's reviews are rated 3 and 15.5 % are rated 4,
+  so 0.845 × ~78 + 0.155 × ~92 ≈ 80 — the tile's exact value is the sum of all 83,188 KPI scores ÷ 83,188.
 - *The arrow:* 80.12 against about 80.09 a year earlier: +0.03.
 
 **OUTSTANDING REVIEWS — 15.5 %**
