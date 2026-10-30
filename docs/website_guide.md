@@ -343,3 +343,205 @@ duplicate and the app retries with the next one.
 
 **Is the data safe on the public site?** Writes need the editor passcode; credentials live only in
 Streamlit secrets; every value is a bound SQL parameter.
+
+## 13. The data: from 1,470 IBM rows to 100,000 employees
+
+### 13.1 The source: IBM HR Analytics Employee Attrition & Performance
+
+One CSV file (`data/raw/WA_Fn-UseC_-HR-Employee-Attrition.csv`): **1,470 rows, one per employee, 35
+columns**. It's a single **snapshot**, with no dates and no history.
+
+How to read the 1–4 scales:
+- **Satisfaction and involvement:** 1 Low · 2 Medium · 3 High · 4 Very high.
+- **Work-life balance:** 1 Bad · 2 Good · 3 Better · 4 Best.
+- **Performance rating:** 1 Low · 2 Good · 3 Excellent · 4 Outstanding.
+- **Education** (1–5): 1 Below college · 2 College · 3 Bachelor · 4 Master · 5 Doctor.
+
+| Column | Values in the file | Meaning | Where it went in this project |
+|---|---|---|---|
+| Age | 18 – 60 (median 36) | age at the snapshot | date of birth (±1 year variation) |
+| Attrition | No 1,233 · Yes 237 (16.1 %) | has the person left? | exit date and exit reason (Yes → left between 2019 and June 2026) |
+| BusinessTravel | Travel_Rarely 1,043 · Travel_Frequently 277 · Non-Travel 150 | how often they travel | job version (`business_travel`) |
+| DailyRate | 102 – 1,499 | a pay rate unrelated to income (noise) | kept in staging only |
+| Department | R&D 961 · Sales 446 · Human Resources 63 | department | `departments`, job version |
+| DistanceFromHome | 1 – 29 km | commute distance | `employees.distance_from_home_km` (±2 km) |
+| Education | 1 – 5 | education level | `education_levels` |
+| EducationField | Life Sciences 606 · Medical 464 · Marketing 159 · Technical Degree 132 · Other 82 · Human Resources 27 | field of study | `education_fields` |
+| EmployeeCount | always 1 | constant | dropped (no information) |
+| EmployeeNumber | 1 – 2,068 | IBM's id | `source_employee_number` in staging: which IBM row a synthetic employee was modelled on; new codes are EMP000001… |
+| EnvironmentSatisfaction | 1 – 4 | survey answer | `employee_surveys` (latest survey = IBM value) |
+| Gender | Male 882 · Female 588 | gender | `employees.gender` |
+| HourlyRate | 30 – 100 | noise | staging only |
+| JobInvolvement | 1 – 4 | survey answer | `employee_surveys` |
+| JobLevel | 1 – 5 (median 2) | seniority | job version (`job_levels`; each level has a salary band) |
+| JobRole | 9 roles (Sales Executive 326 … Human Resources 52) | role | `job_roles`, job version |
+| JobSatisfaction | 1 – 4 | survey answer | `employee_surveys` |
+| MaritalStatus | Married 673 · Single 470 · Divorced 327 | marital status | `employees` (deliberately **not** used in the risk score) |
+| MonthlyIncome | 1,009 – 19,999 (median 4,919) | monthly pay | job version (±7 %, kept inside the level's band) |
+| MonthlyRate | 2,094 – 26,999 | noise | staging only |
+| NumCompaniesWorked | 0 – 9 | previous employers | `prior_companies_count` (corrected by rule D19 in the ETL: 16,500 values) |
+| Over18 | always Y | constant | dropped |
+| OverTime | No 1,054 · Yes 416 | works overtime | review `overtime_flag` (latest review = IBM value) |
+| PercentSalaryHike | 11 – 25 % | last pay rise | the last pay change in the job history (92 % within 1 point) |
+| PerformanceRating | **only 3 and 4** | last rating | latest review = IBM value |
+| RelationshipSatisfaction | 1 – 4 | survey answer | `employee_surveys` |
+| StandardHours | always 80 | constant | dropped |
+| StockOptionLevel | 0 – 3 | stock options | job version |
+| TotalWorkingYears | 0 – 40 | whole career | prior experience = TotalWorkingYears − YearsAtCompany |
+| TrainingTimesLastYear | 0 – 6 | trainings last year | review `training_sessions` (latest = IBM value) |
+| WorkLifeBalance | 1 – 4 | survey answer | `employee_surveys` |
+| YearsAtCompany | 0 – 40 (median 5) | tenure | **hire date** = snapshot (or exit) − years |
+| YearsInCurrentRole | 0 – 18 | time in role | date of the **last role change** |
+| YearsSinceLastPromotion | 0 – 15 (median 1) | time since promotion | date of the **last promotion** |
+| YearsWithCurrManager | 0 – 17 | time with manager | date of the **last manager change** |
+
+The last four columns are what make history possible: they say *when* things happened, so the job
+history is built backwards from them (§13.2). Rebuilding the IBM columns from the database gives
+back the original values: 100 % for tenure, role, promotion and level, and 98 % for years with the
+manager.
+
+### 13.2 What the synthesizer generates (`src/synthesizer`, seed 42, snapshot 30 June 2026)
+
+| Generated table (staging) | Rows | How |
+|---|---:|---|
+| `stg_employees` | 100,000 (+500 planted duplicates) | **Stratified sampling** of the IBM rows: each group of (attrition, department, role, level) gets its exact share of the 100,000, so the mix matches IBM. Small variations ("jitter") make every person unique: income ±7 % (inside the level's band), age ±1, distance ±2 km. Faker creates new identities: Indian names, `example.com` e-mails, phone numbers. The hire date comes from YearsAtCompany, and leavers get an exit date between 2019 and June 2026 |
+| `stg_job_history` | 308,986 versions | Built **backwards** from today's job using the IBM dates: last promotion, last role change, last manager change. 10 % of people get a department transfer, and long careers get earlier promotions. Pay changes follow PercentSalaryHike. Versions per person: 1 → 8,594 people · 2 → 21,095 · 3 → 30,175 · 4 → 34,579 · 5+ → 5,557 |
+| `stg_surveys` | 468,646 | One engagement survey per person per year (September–October, 2019–2025) while employed. The **latest** survey holds the IBM answers; earlier years step back with small changes, keeping the IBM mix every year |
+| `stg_reviews` | 463,015 (+1,389 planted resubmissions) | One review per person per year, held 15 Jan – 15 Mar of the next year, for people who **joined by 30 September** and are still employed on the review date. The latest review holds the IBM rating, overtime and training; earlier years step back the same way. The KPI comes from the rating (§14, question 5). Reviewer = the manager on the review date; project = the person's main project that year |
+| `stg_projects` | 2,000 | Split over departments by headcount, with Faker names. Managers are level-3+ staff of the department. About 40 % of finished projects end late, by 1–120 days |
+| `stg_assignments` | 503,240 | Each employment year, 92 % of people are on a project and 25 % of those also on a second one. Allocations are 20–100 %; about 5 % are allowed above 100 % (bottlenecks) |
+
+**Planted data-quality problems.** A real source system is never clean, and the problem statement
+asks the ETL to clean data. So the synthesizer deliberately adds problems and records each one in a
+manifest. The ETL must fix every one, and a test checks the counts:
+
+| Problem planted in staging | Count | Fixed by the ETL with |
+|---|---:|---|
+| The same employee sent twice | 500 | `ROW_NUMBER()` per employee code, newest kept |
+| Gender written as "M" / "F" | 1,027 | `CASE` → Male / Female |
+| Department / role labels with wrong case, extra spaces or aliases ("R&D", "HR", "Sales Dept") | 6,172 job versions · 2,011 employees | `TRIM` + case-insensitive match + alias map |
+| A review sent again with a corrected KPI ("resubmission") | 1,389 | `ROW_NUMBER()` per employee and year, latest kept |
+
+### 13.3 From staging to the dashboards
+
+1. **`hr_staging`** holds the raw data: 1.85 million rows.
+2. **`sp_migrate_from_staging`** cleans it, removes duplicates and splits it into the normalized
+   **`hr_oltp`** (14 tables).
+3. **`sp_run_etl`** loads the star schema **`hr_dw`**: first the dimensions, with SCD Type 2 history,
+   then the review fact.
+
+The website's forms work on `hr_oltp`; its dashboards read `hr_dw`.
+
+## 14. Your questions answered
+
+**1. Why does Active headcount show 83,880 and not 100,000?**
+100,000 people have *ever* been employed. 16,122 of them (16.1 %, the IBM attrition rate) left
+between January 2019 and June 2026. They stay in the database because their reviews and job history
+are still needed.
+- Active headcount = employees with no exit date.
+- It grows by one with every hire made on the site (83,878 → 83,880 after two test hires).
+
+**2. Why does the latest review cycle have 83,188 reviews when 83,880 people are active?**
+They count different people:
+
+| | People |
+|---|---:|
+| Active today **and** reviewed for 2025 | 82,421 |
+| + reviewed for 2025, **left afterwards** (April – June 2026) | 767 |
+| = reviews in cycle FY2025-26 | **83,188** |
+| Active today **and** reviewed for 2025 | 82,421 |
+| + active, **hired on or after 1 October 2025**: too new for the 2025 review | 1,459 |
+| = active headcount | **83,880** |
+
+The rule: an employee is reviewed for a year only if they joined by **30 September** of that year
+(at least a quarter of the year to judge), and are still employed on the review date. New joiners get
+their first review in the next cycle.
+
+**3. What is a review cycle?**
+Once a year, everyone is reviewed for the previous year: performance year 2025 is reviewed between
+15 January and 15 March 2026. Those dates fall in India's fiscal year FY2025-26 (April 2025 – March
+2026), so the cycle is called FY2025-26. There are seven: FY2019-20 to FY2025-26.
+
+**4. Can a rating be 4.5? How is the average rating 3.155?**
+No. A single review's rating is always a whole number: 1 Low, 2 Good, 3 Excellent, 4 Outstanding.
+Only averages have decimals. Like IBM's data, the generated reviews use only 3 and 4, so the average
+is 3 + the share of 4s: 3 + 0.155 = **3.155**.
+
+**5. How is the KPI score produced? Is it just a random number?**
+For reviews entered on the site, the reviewer types it. For the generated reviews (the IBM data has
+no KPI), it's drawn at random, but **from a range chosen by the review's rating, the only factor
+used**:
+
+| Rating | KPI centred on | Typical spread | Always between |
+|---|---:|---:|---|
+| 4 · Outstanding | 92 | ± 4 | 85 – 100 |
+| 3 · Excellent | 78 | ± 7 | 60 – 95 |
+| 2 · Good | 60 | ± 7 | 40 – 75 |
+| 1 · Low | 42 | ± 7 | 20 – 60 |
+
+- **"Centred on 92 with spread ± 4"** means most Outstanding reviews score between 88 and 96, with
+  fewer further out.
+- **Out-of-range values** are drawn again rather than cut off, so scores don't pile up at 100.
+- **Example:** three Outstanding reviews might get 91.37, 95.02 and 88.64.
+- **Nothing else counts:** tenure, department and pay play no part. So KPI agrees with the rating
+  without being a copy of it.
+- **The cycle's average (80.12)** follows from this. 84.5 % of reviews are 3s (≈ 78) and 15.5 % are
+  4s (≈ 92), so 0.845 × 78 + 0.155 × 92 ≈ 80.
+
+**6. What are the "corrected resubmissions", and why are some KPIs outside their range?**
+In real HR systems a manager sometimes submits a review, then corrects it and submits it again, so
+the source data contains the same review twice. The synthesizer imitates this on purpose for 1,389
+reviews (0.3 %): it adds a **second copy** of the review in staging, with the KPI changed by a small
+random amount (typically ± 3 points). A real example from the data, employee **EMP000022**, review
+of 2019, rating 3:
+
+| Staging row | KPI | |
+|---|---:|---|
+| 7 (first submission) | 85.07 | dropped by the ETL |
+| 463,016 (resubmission) | **89.64** | **kept**: the latest submission wins |
+
+- The ETL keeps exactly one review per employee and year, the latest, using `ROW_NUMBER()`.
+- The correction is applied after the KPI was drawn, so it can push a score slightly past its
+  rating's range. **24** of the 463,015 reviews lie just outside, for example an Outstanding review
+  at 84.6, just under 85.
+- That's realistic (a corrected value) and documented, not an error.
+
+**7. How is attrition 2.59 % calculated, and what does ▼ -0.08 mean?**
+Leavers in fiscal year FY2025-26 ÷ average headcount × 100 = 2,153 ÷ ((82,632 + 83,835) ÷ 2) =
+**2.59 %**. The year before it was 2.67 %, so it fell by 0.08 points. Fewer people left, so it's
+shown in green.
+
+**8. What are the attrition-risk bands in the donut?**
+Each active employee gets 0–14 points from 11 work-related warning signs:
+- **2 points each:** overtime, entry level, no stock options.
+- **1 point each:** under 2 years at the company, low environment satisfaction, low job
+  satisfaction, poor work-life balance, low involvement, frequent travel, more than 10 km from home,
+  pay in the lower half of the level.
+
+The bands:
+
+| Band | Score | Share of active employees |
+|---|---|---:|
+| Low | 0–2 | 31.8 % |
+| Medium | 3–5 | 55.6 % |
+| High | 6–7 | 11.5 % |
+| Very high | 8+ | 1.09 % |
+
+Tested on history: 0.7 % of Low and 19.5 % of Very high employees left within a year. The High and
+Very high bands hold 19 % of employees but 63 % of the leavers. Marital status, age and gender are
+deliberately not used.
+
+**9. Why does the number of overdue projects grow without anyone doing anything?**
+Overdue means open with a planned end date before **today**. Every day, an open project whose
+planned end was yesterday becomes overdue (87 → 89 in a few days). The number falls when projects
+are closed.
+
+**10. When do balloons appear?**
+Only after an employee is onboarded successfully. Never after a warning (nothing was saved), and on
+no other page.
+
+**11. Why was the first visit slow, and switching pages slow?**
+- **The first visit** after the app starts computes the company-wide risk score on the small cloud
+  server. That takes about 20 s, once.
+- **Page switches** used to ask the database "has anything changed?" 3–5 times per page, at 0.45 s
+  each. That answer is now reused for a minute, so cached pages open in well under a second.
