@@ -5,7 +5,7 @@ data is accepted. Negative tests deliberately insert invalid data and assert tha
 it with the expected error code:
     1062 duplicate key · 1451 parent row still referenced · 1452 missing parent row
     3819 CHECK constraint violated
-Every test runs inside a transaction that is rolled back (see conftest.py).
+Every test runs inside a transaction that is rolled back (see conftest.py). 
 """
 import itertools
 from datetime import date
