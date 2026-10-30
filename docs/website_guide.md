@@ -502,8 +502,8 @@ of 2019, rating 3:
 
 - The ETL keeps exactly one review per employee and year, the latest, using `ROW_NUMBER()`.
 - The correction is applied after the KPI was drawn, so it can push a score slightly past its
-  rating's range. **24** of the 463,015 reviews lie just outside, for example an Outstanding review
-  at 84.6, just under 85.
+  rating's range. **24** of the 463,015 reviews lie just outside it: 15 Outstanding reviews between
+  79.66 and 84.23 (range 85–100), and 9 Excellent ones at 59.15 or up to 97.37 (range 60–95).
 - That's realistic (a corrected value) and documented, not an error.
 
 **7. How is attrition 2.59 % calculated, and what does ▼ -0.08 mean?**
