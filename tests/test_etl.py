@@ -8,7 +8,7 @@ Reconciliation tests read the loaded data and compare each layer with the one be
 They need a completed run:  python scripts/run_etl.py --migrate
 Change-flow tests run the application's SCD Type 2 path inside a transaction that is rolled
 back (see conftest.py), so the loaded data is never modified.
-"""
+""" 
 import json
 from datetime import date, timedelta
 
