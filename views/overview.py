@@ -1,4 +1,5 @@
 """Command centre: headline numbers, where the people are, and how risk is spread."""
+import pandas as pd
 import streamlit as st
 
 from src.dal import AnalyticsManager
@@ -32,6 +33,14 @@ if workforce is not None:
     scope = filters.select(workforce)
     left, right = st.columns([2, 1])
     left.plotly_chart(charts.headcount_treemap(scope), width="stretch")
+    tenure_labels = ["<1", "1", "2", "3-4", "5-9", "10-19", "20+"]
+    by_tenure = (scope.assign(years=pd.cut(scope.tenure_years, [-1, 0, 1, 2, 4, 9, 19, 99], labels=tenure_labels))
+                 .groupby(["years", "band_order", "risk_band"], observed=True, as_index=False).size()
+                 .rename(columns={"size": "employees"}).sort_values(["years", "band_order"]))
+    by_tenure["years"] = by_tenure.years.astype(str)
+    left.plotly_chart(charts.bars(by_tenure, "years", "employees", "risk_band", colors=theme.BAND_COLORS,
+                                  title="Active employees by years at the company · colour = risk band"),
+                      width="stretch")
     bands = scope.groupby("risk_band", as_index=False).size().rename(columns={"size": "employees"})
     bands = bands.set_index("risk_band").reindex(list(theme.BAND_COLORS)).dropna().reset_index()
     right.plotly_chart(charts.donut(bands, "risk_band", "employees", theme.BAND_COLORS,
