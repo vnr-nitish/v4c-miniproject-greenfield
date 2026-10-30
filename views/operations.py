@@ -5,7 +5,7 @@ import pandas as pd
 import streamlit as st
 
 from src.dal import AnalyticsManager, EtlManager
-from src.ui.common import attempt, editor_unlocked, page_header
+from src.ui.common import attempt, data_changed, editor_unlocked, page_header
 
 page_header("ETL & data health", "Run the stored-procedure ETL (OLTP → star schema) and read its audit trail")
 etl, am = EtlManager(), AnalyticsManager()
@@ -20,6 +20,7 @@ if editor_unlocked():
         with st.status("Running hr_dw.sp_run_etl …", expanded=True) as status:
             batch_id = attempt(etl.run_warehouse_etl)
             if batch_id:
+                data_changed()
                 for step in etl.batch_steps(batch_id):
                     st.write(f"✅ {step['step_name']}: {step['rows_affected']:,} rows — {step['message'] or ''}")
                 status.update(label=f"ETL batch {batch_id} finished in {time.perf_counter() - started:.0f} s",

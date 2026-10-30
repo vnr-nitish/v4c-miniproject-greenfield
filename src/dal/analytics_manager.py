@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import re
 import threading
+import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -198,16 +199,36 @@ class AnalyticsManager(DatabaseConnection):
         if not hasattr(self, "_cache"):           # a Singleton: __init__ runs on every AnalyticsManager()
             self._cache: OrderedDict[tuple, Any] = OrderedDict()
             self._cache_lock = threading.Lock()
+            self._version: tuple = ()
+            self._version_at = float("-inf")
 
     # ------------------------------------------------------------------ cache
 
-    def data_version(self) -> tuple:
+    VERSION_TTL_SECONDS = 60
+
+    def data_version(self, fresh: bool = False) -> tuple:
         """(latest finished batch id, today). A batch's status leaves STARTED in the same commit
-        as its data, so a query running during an ETL can never be cached as the new version."""
+        as its data, so a query running during an ETL can never be cached as the new version.
+
+        The answer is reused for VERSION_TTL_SECONDS: asking the database costs a network round
+        trip (about 0.45 s to the cloud database), and every cached chart needs the version.
+        Changes made through this application call refresh_version(), so they show at once;
+        changes made elsewhere (an ETL from the command line) show within a minute.
+        """
+        now = time.monotonic()
+        if not fresh and not self.in_rollback_session() and now - self._version_at < self.VERSION_TTL_SECONDS:
+            return self._version
         row = self.fetch_one(
             "SELECT COALESCE(MAX(batch_id), 0), CURDATE() FROM hr_dw.etl_batch_log "
             "WHERE log_id = batch_id AND status <> 'STARTED'", dictionary=False)
-        return tuple(row)
+        if self.in_rollback_session():           # uncommitted data: never remembered
+            return tuple(row)
+        self._version, self._version_at = tuple(row), now
+        return self._version
+
+    def refresh_version(self) -> None:
+        """The warehouse was just changed by this application: check the version on the next call."""
+        self._version_at = float("-inf")
 
     def clear_cache(self) -> None:
         with self._cache_lock:
