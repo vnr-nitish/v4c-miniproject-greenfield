@@ -9,7 +9,7 @@ Every test runs inside a transaction that is rolled back (see conftest.py).
 """
 import itertools
 from datetime import date
-
+ 
 import mysql.connector
 import pytest
 
