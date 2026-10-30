@@ -6,13 +6,20 @@ import streamlit as st
 from src.dal import EmployeeManager, ProjectManager, ReferenceDataManager, ReviewManager
 from src.models import Position
 from src.ui import charts
-from src.ui.common import attempt, editor_unlocked, page_header
+from src.ui.common import attempt, data_changed, editor_unlocked, page_header
 from src.ui.forms import position_picker
 
 page_header("Employee 360", "Profile, career timeline and job changes — a department change creates a new SCD Type 2 "
                             "version in the warehouse")
 em = EmployeeManager()
-examples = attempt(lambda: em.example_codes(6)) or []
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def example_codes() -> list[str]:
+    return EmployeeManager().example_codes(6)
+
+
+examples = attempt(example_codes) or []
 c1, c2 = st.columns([2, 3])
 code = c1.text_input("Employee code", value=st.session_state.get("e360_code", examples[0] if examples else ""))
 picked = c2.pills("Examples with a long history", examples)
@@ -53,6 +60,7 @@ with tab_change:
         if st.button("Apply change", type="primary"):
             change = attempt(lambda: em.change_position(employee.employee_id, Position(**new), effective, reason))
             if change:
+                data_changed()
                 st.session_state["e360_changed"] = True
                 st.success(f"{change.change_reason} recorded — warehouse batch {change.batch_id}.")
                 old, cur = st.columns(2)
@@ -84,4 +92,5 @@ with tab_more:
                     if st.form_submit_button("Record exit"):
                         closed = attempt(lambda: em.record_exit(employee.employee_id, exit_date, int(reason_id)))
                         if closed is not None:
+                            data_changed()
                             st.success(f"Exit recorded; {closed} assignment(s) closed; warehouse updated.")

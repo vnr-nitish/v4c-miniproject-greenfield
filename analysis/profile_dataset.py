@@ -1,7 +1,7 @@
 """Profile the IBM HR Attrition dataset before designing the OLTP schema.
 
 Measures column domains, functional dependencies and business rules. Every finding
-(F1-F12) in docs/oltp_design.md is reproduced by this script.
+(F1-F12) in docs/oltp_design.md is reproduced by this script. 
 
 Usage:
     python analysis/profile_dataset.py

@@ -661,3 +661,12 @@ project's own commands, only `.env` pointing to Aiven: `setup_database.py` (112 
   several tabs drew the unlock form twice under one key — each form now has its own key, and five tests
   render every data-entry page with a passcode set. Also found on the empty cloud database: bar charts failed
   on empty results (fixed in PR #9).
+
+## Step 26 — Faster page switches and a website guide
+
+**Measured on the live database:** every cached chart first asked the database for the warehouse
+version (a 0.45 s round trip to Aiven), 3–5 times per page; the manager drop-down (≈ 2 s) and the
+Employee 360 examples (≈ 1 s) were queried on every click. **Changed:** the version is reused for
+60 s and refreshed at once after a change made in the app (onboarding, job change, exit, ETL);
+the two lists are cached (5 min, 1 h). Cached calls now take under 1 ms instead of ~0.45 s each.
+`docs/website_guide.md` explains every page, control, rule and data flow. Tests: 228 / 228.

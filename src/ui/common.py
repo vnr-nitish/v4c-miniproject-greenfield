@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 import streamlit as st
 
-from src.dal import AnalyticsFilter
+from src.dal import AnalyticsFilter, AnalyticsManager
 from src.exceptions import BusinessRuleError, HRAppError, NotFoundError, ValidationError
 from src.ui.theme import TILE_COLORS, inject_css
 
@@ -35,6 +35,11 @@ def tiles(items: list[tuple[str, str, float | None, bool]]) -> None:
         html.append(f"<div class='tile' style='--c:{color}'><div class='label'>{label}</div>"
                     f"<div class='value'>{value}</div>{delta}</div>")
     st.markdown(f"<div class='tiles'>{''.join(html)}</div>", unsafe_allow_html=True)
+
+
+def data_changed() -> None:
+    """This page just changed the warehouse: dashboards re-check its version on the next visit."""
+    AnalyticsManager().refresh_version()
 
 
 def current_filters() -> AnalyticsFilter:

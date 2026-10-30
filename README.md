@@ -11,7 +11,7 @@ data-entry forms and interactive dashboards.
 ## Tech stack
 Python 3.11 (OOP, pandas, Faker) · MySQL 8 · Streamlit · Plotly · draw.io · GitHub · Streamlit Community Cloud
 
-## Project structure
+## Project structure 
 ```
 ├── app.py                # Streamlit entry point (navigation, filters, warm-up)
 ├── views/                # Streamlit pages (data entry + dashboards); src/ui/ holds theme and 3D charts
