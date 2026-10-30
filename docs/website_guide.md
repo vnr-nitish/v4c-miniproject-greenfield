@@ -422,6 +422,95 @@ manifest. The ETL must fix every one, and a test checks the counts:
 | Department / role labels with wrong case, extra spaces or aliases ("R&D", "HR", "Sales Dept") | 6,172 job versions · 2,011 employees | `TRIM` + case-insensitive match + alias map |
 | A review sent again with a corrected KPI ("resubmission") | 1,389 | `ROW_NUMBER()` per employee and year, latest kept |
 
+### 13.4 Reference data and the organisation structure
+
+**Departments (3)**
+
+| Code | Department | Active employees |
+|---|---|---:|
+| HR | Human Resources | 3,469 |
+| RND | Research & Development | 56,328 |
+| SAL | Sales | 24,081 |
+
+**Job levels (5): each level has a salary band (monthly income)**
+
+| Level | Title | Salary band |
+|---|---|---|
+| 1 | Entry | 1,000 – 5,000 |
+| 2 | Intermediate | 2,000 – 10,000 |
+| 3 | Senior | 5,000 – 14,000 |
+| 4 | Lead | 11,000 – 18,000 |
+| 5 | Executive | 18,000 – 20,000 |
+
+**Job roles (9): which department offers each one, and which levels it allows**
+
+| Role | Department(s) | Allowed levels |
+|---|---|---|
+| Human Resources | Human Resources | 1 – 3 |
+| Laboratory Technician | Research & Development | 1 – 3 |
+| Research Scientist | Research & Development | 1 – 3 |
+| Healthcare Representative | Research & Development | 2 – 4 |
+| Manufacturing Director | Research & Development | 2 – 4 |
+| Research Director | Research & Development | 3 – 5 |
+| Sales Representative | Sales | 1 – 2 |
+| Sales Executive | Sales | 2 – 4 |
+| Manager | all three departments | 3 – 5 |
+
+These rules are enforced everywhere. The forms offer only valid choices, and the database procedure
+`sp_validate_position` refuses anything else:
+- a role must be offered by the department;
+- the level must be inside the role's range;
+- the pay must be inside the level's band;
+- the manager must be an active employee.
+
+**Active employees by department and level**
+
+| Department | L1 | L2 | L3 | L4 | L5 |
+|---|---:|---:|---:|---:|---:|
+| Human Resources | 1,565 | 884 | 272 | 272 | 476 |
+| Research & Development | 22,653 | 18,096 | 7,891 | 4,558 | 3,130 |
+| Sales | 2,993 | 13,809 | 4,490 | 2,041 | 748 |
+
+**Who reports to whom (the org chart)**
+- Every employee reports to a manager **in the same department at a higher level**: a level-1
+  employee may report to a level-2, 3, 4 or 5 manager.
+- **Level-5 executives** report to their **department head**, also level 5. That's the only case of
+  equal levels (4,119 people).
+- **Department heads have no manager.**
+- About **1 %** of active employees (822) have no recorded manager. Their job version dates from the
+  company's early years, when no senior colleague was employed for the whole period. Rather than
+  invent an invalid manager, it's left empty, and their reviews go to the department head.
+- A manager changes only at a **manager change** or a **transfer**. The **reviewer** of a review is
+  the person's manager on the review date.
+
+| Employee level | Manager level 2 | 3 | 4 | 5 |
+|---|---:|---:|---:|---:|
+| 1 | 11,934 | 7,568 | 4,573 | 3,136 |
+| 2 | — | 12,356 | 13,273 | 7,160 |
+| 3 | — | — | 5,890 | 6,763 |
+| 4 | — | — | — | 6,284 |
+| 5 | — | — | — | 4,119 |
+
+**Other reference lists**
+- **Education levels:** 1 Below College · 2 College · 3 Bachelor · 4 Master · 5 Doctor.
+- **Education fields:** Human Resources · Life Sciences · Marketing · Medical · Other · Technical Degree.
+- **Exit reasons:**
+  - *Voluntary:* Better Opportunity · Career Change · Compensation · Relocation · Retirement ·
+    Work-Life Balance.
+  - *Involuntary:* Contract End · Layoff / Restructuring · Performance Termination.
+- **Performance ratings and the pay rise each one allows:**
+
+  | Rating | Pay rise range |
+  |---|---|
+  | 1 Low | 0–4 % |
+  | 2 Good | 5–10 % |
+  | 3 Excellent | 11–19 % |
+  | 4 Outstanding | 20–25 % |
+
+- **Job changes in the history** (308,986 versions): Hire 100,000 · Promotion 96,519 ·
+  Role Change 57,723 · Manager Change 45,479 · Transfer 9,265.
+- **Projects by status** (2,000): Completed 1,563 · Active 252 · Cancelled 105 · Planned 53 · On Hold 27.
+
 ### 13.3 From staging to the dashboards
 
 1. **`hr_staging`** holds the raw data: 1.85 million rows.
