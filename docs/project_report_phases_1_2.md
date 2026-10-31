@@ -142,10 +142,71 @@ Scale the dataset to **100,000+ employees** with pandas and Faker, and **enginee
 changes, promotions, pay rises) so the warehouse can demonstrate **SCD Type 2** — although the source
 is a single snapshot with no dates.
 
-**Key idea:** the four tenure columns (YearsAtCompany, YearsInCurrentRole, YearsSinceLastPromotion,
-YearsWithCurrManager) say *when* things happened. Counting back from a snapshot date turns them into
-dated events, so the history is built **backwards from the present** and the original IBM values can
-be recovered exactly from the database.
+#### Key idea: building the history backwards from "today"
+
+**The problem.** The IBM file is like a single photo. It shows where each person is *now* (role,
+level, salary), but not how they got there. The warehouse needs a career history (joined, changed
+role, got promoted, got a new manager) to demonstrate SCD Type 2.
+
+**The clue.** Four IBM columns already say *how many years ago* something happened:
+
+| IBM column | What it really tells us |
+|---|---|
+| YearsAtCompany | how many years ago the person **joined** |
+| YearsInCurrentRole | how many years ago they **started their current role** |
+| YearsSinceLastPromotion | how many years ago they were **last promoted** |
+| YearsWithCurrManager | how many years ago they **got their current manager** |
+
+**The trick.** We fix the day the "photo" was taken, the **snapshot date: 30 June 2026**. Then "10
+years ago" becomes a real date: go back 10 years from 30 June 2026, then a random 0–359 days more.
+The random days spread people out so they do not all share one date, but are always less than a
+year, so the count of full years stays exactly 10. For someone who has left, we count back from their
+exit date instead.
+
+**Worked example: employee EMP019977**, a Sales Executive at level 3 earning 9,077 a month, copied
+from IBM employee 228.
+
+*Step 1: what the IBM row says (as of 30 June 2026):* joined 10 years ago, current role for 9 years,
+last promoted 7 years ago, current manager for 4 years, last pay rise 12 %.
+
+*Step 2: turn each "years ago" into a date*
+
+| Event | IBM says | Date generated | Full years from that date to 30 June 2026 |
+|---|---|---|---|
+| Joined the company | 10 years ago | 7 Jul 2015 | 10 ✓ |
+| Started current role | 9 years ago | 29 May 2017 | 9 ✓ |
+| Last promotion | 7 years ago | 28 Oct 2018 | 7 ✓ |
+| Got current manager | 4 years ago | 5 Aug 2021 | 4 ✓ |
+
+*Step 3: undo one change at a time, newest first*
+
+- Before the **manager change** (2021): a different manager.
+- Before the **promotion** (2018): one level lower (level 2), and the salary without the 12 % rise:
+  9,077 ÷ 1.12 ≈ 8,104.
+- Before the **role change** (2017): another role in the same department, Sales Representative, on a
+  slightly lower salary (7,685).
+
+*Step 4: the result is this person's job history, four versions in the database*
+
+| Version | From | To | Role | Level | Monthly pay | Manager | What changed |
+|---|---|---|---|---|---|---|---|
+| 1 | 7 Jul 2015 | 29 May 2017 | Sales Representative | 2 | 7,685 | EMP006344 | Hired |
+| 2 | 29 May 2017 | 28 Oct 2018 | Sales Executive | 2 | 8,104 | EMP006344 | Role change |
+| 3 | 28 Oct 2018 | 5 Aug 2021 | Sales Executive | 3 | 9,077 | EMP006344 | Promotion (+12 %) |
+| 4 | 5 Aug 2021 | still current | Sales Executive | 3 | 9,077 | EMP003642 | Manager change |
+
+Read from top to bottom, it is a career story. The warehouse turns each version into one SCD Type 2
+row. You can see this timeline on the website: open **Employee 360** and enter `EMP019977`.
+
+**Why backwards, not forwards?** The only things we know for certain are the *end* of the story (the
+IBM row) and *how long ago* each event happened. Starting from the end and stepping back always lands
+on IBM's exact current values. Starting from an invented hire date and moving forwards would not.
+
+**Why "recovered exactly"?** Count the full years from the four dates to 30 June 2026 and you get 10,
+9, 7 and 4 again, IBM's original numbers. The database view `vw_employee_snapshot` rebuilds an
+IBM-style row from the dates, and an automated test checks that, counted to 30 June 2026, it matches
+the original values for all 100,000 employees. (The view itself counts up to *today*, so on 31 Oct
+2026 it shows 11, 9, 8 and 5 for this employee: people get older, just as in real life.)
 
 ### 2.2 Decisions
 
