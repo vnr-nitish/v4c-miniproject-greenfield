@@ -136,108 +136,200 @@ Employee numbers are IBM's own `EmployeeNumber`, so anyone can look them up in t
 
 ## 2. Data synthesis — from 1,470 to 100,000 employees (Phase 1, task 1)
 
-### 2.1 The goal and the challenge
+### 2.1 What we had, and what we needed
 
-Scale the dataset to **100,000+ employees** with pandas and Faker, and **engineer history** (department
-changes, promotions, pay rises) so the warehouse can demonstrate **SCD Type 2** — although the source
-is a single snapshot with no dates.
-
-#### Key idea: building the history backwards from "today"
-
-**The problem.** The IBM file is like a single photo. It shows where each person is *now* (role,
-level, salary), but not how they got there. The warehouse needs a career history (joined, changed
-role, got promoted, got a new manager) to demonstrate SCD Type 2.
-
-**The clue.** Four IBM columns already say *how many years ago* something happened:
-
-| IBM column | What it really tells us |
-|---|---|
-| YearsAtCompany | how many years ago the person **joined** |
-| YearsInCurrentRole | how many years ago they **started their current role** |
-| YearsSinceLastPromotion | how many years ago they were **last promoted** |
-| YearsWithCurrManager | how many years ago they **got their current manager** |
-
-**The trick.** We fix the day the "photo" was taken, the **snapshot date: 30 June 2026**. Then "10
-years ago" becomes a real date: go back 10 years from 30 June 2026, then a random 0–359 days more.
-The random days spread people out so they do not all share one date, but are always less than a
-year, so the count of full years stays exactly 10. For someone who has left, we count back from their
-exit date instead.
-
-**Worked example: employee EMP019977**, a Sales Executive at level 3 earning 9,077 a month, copied
-from IBM employee 228.
-
-*Step 1: what the IBM row says (as of 30 June 2026):* joined 10 years ago, current role for 9 years,
-last promoted 7 years ago, current manager for 4 years, last pay rise 12 %.
-
-*Step 2: turn each "years ago" into a date*
-
-| Event | IBM says | Date generated | Full years from that date to 30 June 2026 |
-|---|---|---|---|
-| Joined the company | 10 years ago | 7 Jul 2015 | 10 ✓ |
-| Started current role | 9 years ago | 29 May 2017 | 9 ✓ |
-| Last promotion | 7 years ago | 28 Oct 2018 | 7 ✓ |
-| Got current manager | 4 years ago | 5 Aug 2021 | 4 ✓ |
-
-*Step 3: undo one change at a time, newest first*
-
-- Before the **manager change** (2021): a different manager.
-- Before the **promotion** (2018): one level lower (level 2), and the salary without the 12 % rise:
-  9,077 ÷ 1.12 ≈ 8,104.
-- Before the **role change** (2017): another role in the same department, Sales Representative, on a
-  slightly lower salary (7,685).
-
-*Step 4: the result is this person's job history, four versions in the database*
-
-| Version | From | To | Role | Level | Monthly pay | Manager | What changed |
-|---|---|---|---|---|---|---|---|
-| 1 | 7 Jul 2015 | 29 May 2017 | Sales Representative | 2 | 7,685 | EMP006344 | Hired |
-| 2 | 29 May 2017 | 28 Oct 2018 | Sales Executive | 2 | 8,104 | EMP006344 | Role change |
-| 3 | 28 Oct 2018 | 5 Aug 2021 | Sales Executive | 3 | 9,077 | EMP006344 | Promotion (+12 %) |
-| 4 | 5 Aug 2021 | still current | Sales Executive | 3 | 9,077 | EMP003642 | Manager change |
-
-Read from top to bottom, it is a career story. The warehouse turns each version into one SCD Type 2
-row. You can see this timeline on the website: open **Employee 360** and enter `EMP019977`.
-
-**Why backwards, not forwards?** The only things we know for certain are the *end* of the story (the
-IBM row) and *how long ago* each event happened. Starting from the end and stepping back always lands
-on IBM's exact current values. Starting from an invented hire date and moving forwards would not.
-
-**Why "recovered exactly"?** Count the full years from the four dates to 30 June 2026 and you get 10,
-9, 7 and 4 again, IBM's original numbers. The database view `vw_employee_snapshot` rebuilds an
-IBM-style row from the dates, and an automated test checks that, counted to 30 June 2026, it matches
-the original values for all 100,000 employees. (The view itself counts up to *today*, so on 31 Oct
-2026 it shows 11, 9, 8 and 5 for this employee: people get older, just as in real life.)
-
-### 2.2 Decisions
-
-| ID | Decision | Why |
+| | What IBM gave us | What the project needs |
 |---|---|---|
-| D16 | **Stratified bootstrap with bounded jitter**: every group of (attrition, department, role, level) gets its exact share of the 100,000; values vary slightly (income ±7 % inside the level's band, age ±1, distance ±2 km) | Keeps real attribute combinations and correlations; every person unique |
-| D17 | **Timeline:** snapshot **30 June 2026**; review cycles 2019–2025, held 15 Jan – 15 Mar of the next year; surveys September–October; exits spread from 2019 to the snapshot | Seven years of trends; realistic review calendar |
-| D18 | **Pay-grade promotions** when a level change would break the role's level range | Keeps 100 % of IBM tenure values and every business rule (finding F8) |
-| D19 | **NumCompaniesWorked cleaning rule**, applied in SQL during the migration | Fixes the contradiction found in F7 where cleaning belongs (the ETL) |
-| D20 | Faker locale **en_IN** (Indian names) | Consistent with the Indian fiscal year in the warehouse |
-| D21 | **Plant small, counted data-quality problems** in staging | Proves the SQL cleaning works; a test compares counts |
-| D24 | **Earlier promotions for long careers** | With only three dated events, long careers started too senior (6.1 % implausible hires → about 1 %) |
-| D26 | **Review and survey history follows the snapshot's distribution** | A first version produced a fake jump in the last review cycle (see 2.6) |
-| D27 | **KPI from a truncated normal distribution** per rating | Clipping had piled 1,810 scores at exactly 100 |
+| People | 1,470 | 100,000 or more |
+| Rows per person | 1 (a single "photo" of today) | many: a job history, a review and a survey every year, project work |
+| Dates | none | hire, promotion, review and exit dates |
 
-### 2.3 How each part was generated
+We built the data in Python with **pandas** (for tables) and **Faker** (for fake names, e-mails and
+phone numbers), in four steps:
 
-| Table | Rows | How it was generated |
+1. **Make more people:** turn 1,470 IBM employees into 100,000 different ones (2.2).
+2. **Give everyone a past:** work out each person's career from IBM's "years" columns (2.3).
+3. **Add yearly records:** one performance review and one survey per person per year, 2019–2025 (2.4).
+4. **Add project work:** 2,000 projects and the people who work on them (2.5).
+
+The result is about **1.85 million rows** in six tables. Section 2.6 explains why 100,000 people
+produce that many rows.
+
+### 2.2 Step 1: from 1,470 people to 100,000 (decision D16)
+
+**In one line:** each IBM employee is used as a **template** about 68 times (100,000 ÷ 1,470 ≈ 68),
+and every copy becomes a different person.
+
+**How it works**
+
+1. **Sort the 1,470 people into groups.** A group is people who share four things: stayed or left,
+   department, role and level. There are 52 groups. Example: "stayed, Sales, Sales Executive,
+   level 3" holds 62 of the 1,470 IBM people, which is 4.22 %.
+2. **Give each group the same share of the 100,000.** 4.22 % of 100,000 = 4,218 people. To fill
+   those places, templates are picked from that group at random, and the same template can be picked
+   many times. Because every group keeps its share, the overall mix stays the same as IBM's:
+   16.12 % leavers and 65 % R&D in both.
+3. **Make each copy a different person.**
+   - **New:** name, e-mail, phone number and date of birth, made by Faker (Indian names, D20).
+   - **Changed a little:** salary ±7 % (always inside the level's pay band), age ±1 year, distance
+     from home ±2 km.
+   - **Kept exactly:** department, role, level, the "years" columns, rating, overtime and survey
+     answers. They describe the person's real situation, so they must stay true to IBM.
+
+**Example: IBM employee 228** (woman, 30, Sales Executive, level 3, salary 9,419, lives 5 km away) was
+picked 73 times. Four of the 73 people made from that row:
+
+| | Name | Age | Monthly salary | Distance from home |
+|---|---|---|---|---|
+| IBM employee 228 (the template) | (IBM has no names) | 30 | 9,419 | 5 km |
+| EMP019977 | Chameli Dube | 30 | 9,077 | 3 km |
+| EMP020026 | Yashica Nanda | 30 | 9,021 | 5 km |
+| EMP020081 | Aishani Halder | 31 | 9,936 | 6 km |
+| EMP020478 | Ira Bhattacharyya | 30 | 9,672 | 5 km |
+
+All four do the same job for the same number of years, but they are different people.
+
+**Why this way?**
+
+| Other way | What goes wrong |
+|---|---|
+| Copy every row 68 times | 68 identical twins of each person: obviously fake |
+| Fill each column at random, on its own | Nonsense people, such as a Sales Representative with a director's salary; real patterns (overtime → leaving) disappear |
+| **Our way** | Every person is a real IBM combination, slightly varied, so the patterns found in 1.4 still hold for all 100,000 |
+
+### 2.3 Step 2: giving everyone a past (the job history)
+
+IBM shows each person only as they are today. But four columns say **how many years ago** something
+happened: when they joined, started their current role, were last promoted, and got their current
+manager. We set "today" to **30 June 2026** and count back (for a leaver, from the exit date).
+
+For EMP019977:
+
+| IBM says | Becomes the date |
+|---|---|
+| joined 10 years ago | 7 Jul 2015 |
+| in the current role for 9 years | 29 May 2017 |
+| last promoted 7 years ago | 28 Oct 2018 |
+| with the current manager for 4 years | 5 Aug 2021 |
+
+Then each change is undone, newest first: before the new manager there was a different manager;
+before the promotion, one level lower and without the 12 % pay rise; before the role change, a
+different role. The career becomes:
+
+- **7 Jul 2015:** hired as Sales Representative, level 2, 7,685 a month
+- **29 May 2017:** role change to Sales Executive, 8,104
+- **28 Oct 2018:** promoted to level 3 (+12 %), 9,077
+- **5 Aug 2021:** new manager; still the same job today
+
+Each line is one row (a "version") in the job history. The warehouse keeps every version; that is
+what **SCD Type 2** means. Counting full years from these dates to 30 June 2026 gives 10, 9, 7 and 4
+again, IBM's original numbers, and an automated test checks this for all 100,000 people. To see this
+career on the website, open **Employee 360** and enter `EMP019977`.
+
+**Three extra rules keep the careers realistic**
+
+- **Promotion without a level change (D18).** A Sales Executive's lowest level is 2, so a level-2
+  Sales Executive who was promoted cannot have been at level 1 before. For such people the
+  promotion is a pay rise at the same level.
+- **Earlier promotions for long careers (D24).** IBM only gives the *last* promotion. Without extra
+  promotions, some long-serving people would have been hired as a level-3 Manager at 18. Adding
+  earlier promotions cut these "too senior at hire" cases from 6.1 % to about 1 %.
+- **Managers and transfers.** Everyone reports to someone in the same department at a higher level.
+  About 10 % of role changes are transfers from another department.
+
+### 2.4 Step 3: a review and a survey every year
+
+| | Performance review | Survey |
+|---|---|---|
+| When | for each year 2019–2025, held 15 Jan – 15 Mar of the following year | every year, September–October |
+| Who | people who joined by 30 September of that year and still work there on the review date | everyone working there on the survey day |
+| What it holds | rating 1–4, KPI score 0–100, overtime yes/no, number of trainings | five satisfaction scores (1–4) |
+| The latest one | exactly IBM's values | exactly IBM's answers |
+| Earlier years | counted back one year at a time, with small changes | the same |
+
+"Small changes" means, for example, that an Outstanding rating stays Outstanding in the year before
+60 % of the time, and overtime stays overtime 80 % of the time.
+
+Two fixes make this history believable:
+
+- **The same mix every year (D26).** The first version made the last year look like a sudden
+  improvement (low ratings fell from 4 % to 0 % in a single year). Now every earlier year has the
+  same mix as IBM's data, so the trend charts show no fake jump.
+- **KPI scores (D27).** The KPI is drawn at random around a centre set by the rating. If a score
+  falls outside the allowed range, it is drawn again. (The first version cut it to the limit
+  instead, which gave 1,810 people a KPI of exactly 100.)
+
+| Rating | KPI is around | Allowed range |
+|---|---|---|
+| 4 Outstanding | 92 | 85–100 |
+| 3 Excellent | 78 | 60–95 |
+| 2 Good | 60 | 40–75 |
+| 1 Low | 42 | 20–60 |
+
+### 2.5 Step 4: projects and who works on them
+
+- **2,000 projects**, shared between departments by size. Each one is led by a manager at level 3
+  or above from that department. About 40 % of finished projects end late, by 1 to 120 days, so the
+  delay charts have something to show.
+- **503,240 assignments.** An assignment means a person works on a project for part of their time.
+  - Each year, 92 % of people are on a project, and 25 % of those also on a second one at the same
+    time.
+  - Each assignment takes 20–100 % of the person's time.
+  - About 5 % of assignments are allowed to push a person above 100 %, so the bottleneck page has
+    real overloaded people to find.
+
+### 2.6 Why 100,000 employees means about 1.85 million rows
+
+**100,000 is the number of people.** Each person also has rows in the other tables: one for each job
+version, one review and one survey per year, and one for each project. Together, all the tables hold
+about 1.85 million rows.
+
+Example: EMP019977, who has worked here since 2015:
+
+| Table | Rows for this person | Why |
 |---|---:|---|
-| Employees | 100,000 | Stratified sample of IBM rows (D16); Faker identities; hire date = snapshot (or exit) − YearsAtCompany; the 16.1 % leavers get an exit date between 2019 and June 2026 |
-| Job history | 308,986 versions | Backwards from the current job: last promotion, last role change and last manager change dated from the IBM columns; 10 % department transfers; earlier promotions for long careers (D24); pay rises consistent with PercentSalaryHike. Every employee reports to someone in the same department at a higher level |
-| Surveys | 468,646 | One per person per year while employed; the latest survey = the IBM answers; earlier years step back with small changes, keeping the IBM mix every year (D26) |
-| Reviews | 463,015 | One per person per year for people who joined by 30 September and are still employed on the review date; latest review = IBM rating, overtime, training; KPI drawn from a range set by the rating (D27); reviewer = manager on the review date |
-| Projects | 2,000 | Split over departments by headcount; managers are level 3+; about 40 % of finished projects end late by 1–120 days |
-| Assignments | 503,240 | 92 % of people staffed each year, 25 % on a second project; allocations 20–100 %; about 5 % allowed above 100 % (bottlenecks) |
-| **Total** | **≈ 1.85 million rows** | |
+| Employees | 1 | the person |
+| Job history | 4 | hired, then 3 changes |
+| Surveys | 7 | one per year, 2019–2025 |
+| Reviews | 7 | one per year, 2019–2025 |
+| Assignments | 8 | projects worked on over the years |
+| **Total** | **27** | |
 
-**KPI rule (D27):** rating 4 → around 92 (85–100), 3 → around 78 (60–95), 2 → around 60 (40–75),
-1 → around 42 (20–60); out-of-range values are drawn again rather than clipped.
+The whole company:
 
-### 2.4 Planted data-quality problems (D21)
+| Table | Rows | Rows per employee (average) |
+|---|---:|---:|
+| Employees | 100,000 | 1 |
+| Job history | 308,986 | 3.1 |
+| Surveys | 468,646 | 4.7 |
+| Reviews | 463,015 | 4.6 |
+| Assignments | 503,240 | 5.0 |
+| Projects | 2,000 | shared by everyone |
+| **Total** | **1,845,887 ≈ 1.85 million** | **about 18.5** |
+
+The averages are below 7 because many people joined after 2019 or left before 2025.
+
+The raw files hold 1,889 more rows (1,847,776 in total): 500 employees sent twice and 1,389 reviews
+resubmitted with a corrected KPI, both planted on purpose (2.8). The Phase 2 cleaning removes them.
+
+### 2.7 Decisions at a glance
+
+| ID | What we decided, in simple words | Why |
+|---|---|---|
+| D16 | Each IBM person is a template used about 68 times; every copy gets a new identity and small changes (2.2) | Keeps IBM's real patterns, but no two people are the same |
+| D17 | "Today" is 30 June 2026. Reviews for 2019–2025, held January–March of the next year; surveys every September–October; leavers left between 2019 and June 2026 | Seven years of history for the trend charts, on a realistic calendar |
+| D18 | Some promotions are a pay rise without a level change (2.3) | A role's level range must never be broken (finding F8) |
+| D19 | The "number of earlier employers" column is fixed in SQL while loading, not in Python | Cleaning belongs in the ETL, where it can be seen and tested (finding F7) |
+| D20 | Indian names (Faker, locale en_IN) | Matches the Indian financial year (April–March) used in the warehouse |
+| D21 | A few counted mistakes are added to the raw data on purpose (2.8) | Gives the SQL cleaning real work, and a test proves each one was fixed |
+| D24 | Earlier promotions are added to long careers (2.3) | Otherwise some people would be hired as senior managers at 18 (6.1 % → about 1 %) |
+| D26 | Older reviews and surveys keep the same mix as IBM's (2.4) | The first version showed a fake sudden improvement in the last year |
+| D27 | A KPI score outside its rating's range is drawn again (2.4) | Cutting at the limit had given 1,810 people a KPI of exactly 100 |
+
+### 2.8 Planted data-quality problems (D21)
+
+Real raw data is messy. So that the SQL cleaning in Phase 2 has real work to do, a few counted
+mistakes were added on purpose. A test checks that every one of them was fixed.
 
 | Problem | Count | Cleaned in Phase 2 by |
 |---|---:|---|
@@ -246,14 +338,14 @@ the original values for all 100,000 employees. (The view itself counts up to *to
 | Department / role labels: wrong case, spaces, aliases ("R&D", "HR", "Sales Dept") | 6,172 | `TRIM` + label map |
 | Review resubmitted with a corrected KPI | 1,389 | `ROW_NUMBER()` per employee and year, latest kept |
 
-### 2.5 Loading into staging
+### 2.9 Loading into staging
 
 The six generated tables are bulk-loaded into the **`hr_staging`** schema (tables mirror the files,
 **no constraints**, so dirty data can land) with batched multi-row inserts of 5,000 rows — 1.85
 million rows in about 1–1.5 minutes. Generation and validation of 100,000 employees takes about
 30 seconds with vectorized pandas / NumPy.
 
-### 2.6 Validation, and what did not work at first
+### 2.10 Validation, and what did not work at first
 
 The synthesizer checks **42 business rules** (0 violations) and measures **fidelity**: rebuilding the
 IBM columns from the generated history gives YearsInCurrentRole and YearsSinceLastPromotion **100 %**,
