@@ -101,17 +101,36 @@ Scales: satisfaction / involvement 1 Low · 2 Medium · 3 High · 4 Very High; w
 
 ### 1.4 What profiling the data told us (and the design decision each finding drove)
 
-| # | Finding (measured on the 1,470 rows) | Consequence |
-|---|---|---|
-| F1 | 8 of 9 roles occur in one department; **Manager occurs in all three** | Department ↔ role is many-to-many → bridge table with the **11 valid pairs** |
-| F2 | Each role spans a fixed range of levels (e.g. Manager 3–5) | `job_roles.min/max_job_level_id`, enforced by procedures |
-| F3 | Each level has a salary band | `job_levels.salary_band_min/max` |
-| F4 | The rating fully determines the salary-hike range (3 → 11–19 %, 4 → 20–25 %) | A transitive dependency → its own table `performance_rating_levels` |
-| F5 | DailyRate, HourlyRate, MonthlyRate do not correlate with income (≈ 0) | Random noise → excluded from the database design |
-| F6 | Tenure rules hold for every row (years in role ≤ years at company ≤ total years) | CHECK constraints and generation rules |
-| F7 | NumCompaniesWorked contradicts experience for 671 rows | A documented cleaning rule (D19) |
-| F8 | 440 level-1 employees were "promoted" although level 1 is the lowest | A promotion is not always a level change → pay-grade promotions |
-| F10 | Attrition 30.5 % with overtime vs 10.4 % without | Overtime recorded per year for trend analysis |
+Before designing any table we studied the 1,470 IBM rows. Each finding below is written in plain
+words, with a real employee or count from the file as an example, and the design decision it led to.
+Employee numbers are IBM's own `EmployeeNumber`, so anyone can look them up in the CSV.
+
+| # | What we found | Example from the IBM file | What we did about it, and why |
+|---|---|---|---|
+| F1 | Every job role belongs to exactly one department, except **Manager**, which exists in all three. | *Sales Executive* appears only in Sales (326 people). *Manager* appears in Sales (37), R&D (54) and HR (11). | A department has many roles, and one role (Manager) sits in several departments: a **many-to-many** link. So we keep a small list table, `department_job_roles`, holding the **11 allowed department + role pairs** (Sales 3, R&D 6, HR 2). The database refuses any pair that is not on the list, such as "Sales Executive in R&D". |
+| F2 | Each role only appears at certain job levels (1 = most junior, 5 = most senior). | Sales Representative: levels 1–2 only. Manager and Research Director: levels 3–5 only. Nobody is a level-5 Sales Representative. | Each role stores its lowest and highest allowed level (`job_roles.min_job_level_id` / `max_job_level_id`). When someone is hired or moved, the stored procedures check that the level is inside that range. |
+| F3 | Each job level has its own pay range. | Level 1 earns 1,009–4,968 a month; level 5 earns 18,041–19,999. | Each level stores its pay band (`job_levels.salary_band_min` / `salary_band_max`). A salary outside the band is rejected, and the web form's pay slider only offers values inside it. |
+| F4 | The performance rating alone decides how big the pay rise can be. | All 1,244 people rated 3 (Excellent) got a rise of 11–19 %; all 226 people rated 4 (Outstanding) got 20–25 %. The two ranges never overlap. | The rise range belongs to the **rating**, not to the person. Storing it on every review would repeat the same numbers hundreds of thousands of times (a **transitive dependency**). So it is stored once, in the small table `performance_rating_levels` (one row per rating). |
+| F5 | Three pay columns, DailyRate, HourlyRate and MonthlyRate, have nothing to do with what people actually earn. | Employee 701 has the lowest salary in the file (1,009) but the highest MonthlyRate (26,999). Employee 259 has the highest salary (19,999) but a MonthlyRate of only 5,678. Their correlation with salary is about 0. | They are random numbers, so they are left out of the database design. They are kept only in the staging (raw landing) area, so every value can still be traced back to the file. |
+| F6 | The "years" columns always fit together logically. | Employee 1: 4 years in current role ≤ 6 years at the company ≤ 8 years of total career, and age 41 − 8 = started working at 33 (at least 18). Not one of the 1,470 rows breaks these rules. | The rules became **CHECK constraints** (rules the database tests on every save) and rules the data generator must follow, so all 100,000 synthetic employees obey them too. |
+| F7 | NumCompaniesWorked ("how many companies has this person worked for") also counts the **current** company, and sometimes says 0 by mistake. | Employee 5 has the value 1, but their whole 8-year career is at this company, so the "1" is this company. Employee 8 has the value 0, yet 1 of their 8 career years was spent elsewhere, so 0 is impossible. 671 rows are affected (197 with 0, 474 with 1). | A written cleaning rule (decision D19), applied in SQL during loading: no earlier job → 0; value 0 or 1 but earlier experience exists → 1; values 2–9 → value minus 1. The result, `prior_companies_count`, counts only the employers **before** this one. |
+| F8 | 440 of the 543 level-1 employees have been promoted, although level 1 is the bottom level, so they cannot have moved up from a lower one. | Employee 5: Research Scientist, 8 years at the company, last promoted 3 years ago, and still at level 1. | A promotion does not always mean a higher level; it can be a **pay-grade promotion** (more pay at the same level). The job history allows both kinds (decision D18). |
+| F9 | Every single (unmarried) employee has stock-option level 0. | All 470 single employees have level 0; married and divorced employees have levels 0 to 3. | A quirk of IBM's fictional data. It is noted, left as it is, and copied by the data generator. |
+| F10 | Overtime is the strongest single sign that someone will leave. | 127 of the 416 people who work overtime left (30.5 %), against 110 of the 1,054 who do not (10.4 %): about three times as likely. | Overtime is stored for **every review year**, not just once, so the dashboards can show how it changes over time and the attrition-risk score can use it (2 points). |
+| F11 | How often someone travels for work does not depend on their role. | In every role, roughly two-thirds to three-quarters of people travel rarely (66–78 %). | Travel is stored with the person's job record (it can change when their job changes), not as a fixed property of the role. |
+| F12 | Job level runs from 1 to 5. It is closely tied to pay but has nothing to do with the performance rating. | Employees per level: 543 / 534 / 218 / 106 / 69. The share rated 4 is similar at every level (10–17 %). Level and salary have a correlation of 0.95 (very strong). | Levels (`job_levels`, with the pay bands from F3) and ratings (`performance_rating_levels`) are two separate tables with no link between them. Ratings 1 and 2 never occur in the file, so their pay-rise ranges were set below rating 3: 0–4 % and 5–10 %. |
+
+**Terms used in this table**
+
+| Term | Meaning in simple words |
+|---|---|
+| Many-to-many | Both sides can have several of the other: one department has many roles, and one role (Manager) can be in many departments. |
+| List (bridge) table | A small table that only records which combinations are allowed, here the 11 department + role pairs. |
+| Transitive dependency | A value that depends on another column instead of on the row itself: the pay-rise range depends on the rating, not on the employee. Such values go in their own table so they are stored once. |
+| CHECK constraint | A rule written into the table that the database tests every time a row is saved; a row that breaks it is refused. |
+| Stored procedure | A small program saved inside the database that checks and saves data, so every change follows the same rules. |
+| Correlation | A number from −1 to 1 showing whether two columns move together: about 0 means no relationship, close to 1 means they rise together. |
+| Staging | The raw landing area where data arrives exactly as delivered, before it is cleaned and loaded into the main database. |
 
 ---
 
