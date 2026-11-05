@@ -200,11 +200,11 @@ experience and number of previous employers.
    and the first job version "Hire") and `sp_scd2_apply_employee` (the first `dim_employee`
    row in the warehouse). If someone else took the same code at the same moment, it retries
    with the next code.
-3. On success: a green message with the new code, **balloons**, and the new warehouse row.
+3. On success: a **pop-up** with the new code and the new warehouse row. Pressing **OK** closes it
+   and leaves an empty form for the next person.
 
-**Balloons appear only here, and only after a successful hire.** They do not appear when the form
-shows a warning (nothing was saved), and no other page uses them — they mark the one moment a new
-person enters the company.
+**The pop-up appears only after a successful hire.** When the form shows a warning, nothing was
+saved and what you typed stays in the form, so you can correct it.
 
 ## 5. Employee 360 · job change
 
@@ -625,9 +625,9 @@ Overdue means open with a planned end date before **today**. Every day, an open 
 planned end was yesterday becomes overdue (87 → 89 in a few days). The number falls when projects
 are closed.
 
-**10. When do balloons appear?**
-Only after an employee is onboarded successfully. Never after a warning (nothing was saved), and on
-no other page.
+**10. When does the onboarding pop-up appear?**
+Only after an employee is onboarded successfully. Never after a warning (nothing was saved). OK
+closes it and leaves an empty form.
 
 **11. Why was the first visit slow, and switching pages slow?**
 - **The first visit** after the app starts computes the company-wide risk score on the small cloud
