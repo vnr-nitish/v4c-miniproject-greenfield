@@ -270,6 +270,17 @@ def test_a_read_session_shares_one_connection(monkeypatch):
     assert len(borrows) == 1
 
 
+def test_a_form_reads_all_its_lists_on_one_connection(monkeypatch):
+    ref = ReferenceDataManager()
+    ref.refresh()
+    borrows = count_borrows(monkeypatch)
+    ref.preload()
+    assert len(borrows) == 1
+    assert len(ref.departments()) == 3 and len(ref.exit_reasons()) == 9
+    ref.preload()                                            # already read: no database work at all
+    assert len(borrows) == 1
+
+
 def test_a_write_inside_a_read_session_gets_its_own_connection(monkeypatch):
     borrows = count_borrows(monkeypatch)
     with DatabaseConnection.read_session():

@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 from streamlit.testing.v1 import AppTest
 
-from src.dal import AnalyticsManager
+from src.dal import AnalyticsManager, EmployeeManager, ReferenceDataManager
 from src.db_manager import DatabaseConnection
 from src.exceptions import DatabaseError, HRAppError, PoolBusyError
 from src.ui import charts
@@ -104,3 +104,71 @@ def test_invalid_onboarding_shows_field_errors(monkeypatch):
     at.button[0].click().run()
     assert not at.exception
     assert any("First name" in w.value for w in at.warning)
+
+
+def onboarding_form(monkeypatch):
+    """The onboarding page, unlocked, with the save replaced: nothing is written to the database."""
+    monkeypatch.delenv("APP_PASSCODE", raising=False)
+    manager = EmployeeManager()
+    existing = manager.get_by_code(manager.example_codes(1)[0])
+    saved = []
+    monkeypatch.setattr(EmployeeManager, "onboard", lambda self, employee, position: saved.append(position) or existing)
+    at = AppTest.from_file("../views/onboard.py", default_timeout=180)
+    at.session_state["editor"] = True
+    at.run()
+    return at, existing, saved
+
+
+def type_a_person(at) -> None:
+    """Last step before pressing Onboard: this test tool forgets a form's unsent text on every run."""
+    typed = {"First name": "Asha", "Last name": "Rao", "E-mail": "asha.rao@example.com", "Phone": "+91 98765 43210"}
+    for field in at.text_input:
+        field.input(typed[field.label])
+
+
+def test_onboarding_shows_a_pop_up_and_then_an_empty_form(monkeypatch):
+    at, existing, saved = onboarding_form(monkeypatch)
+    type_a_person(at)
+    at.button[0].click().run()
+    assert not at.exception, at.exception
+    assert not at.warning, [w.value for w in at.warning]
+    assert saved and saved[0].stock_option_level == 0
+    assert any(existing.employee_code in s.value for s in at.success)      # the pop-up
+    assert not hasattr(at, "balloons") or not at.balloons
+    assert [field.value for field in at.text_input] == ["", "", "", ""]    # the form behind it is already empty
+    at.button(key="onboard_ok").click().run()
+    assert not at.exception, at.exception
+    assert not at.success                                                  # OK closed the pop-up
+    assert [field.value for field in at.text_input] == ["", "", "", ""]
+
+
+def test_each_position_choice_still_narrows_the_next_fields(monkeypatch):
+    """The fields are read before they are drawn, so the choices are taken from the session."""
+    at, _, saved = onboarding_form(monkeypatch)
+    sales = ReferenceDataManager().roles_for(3)                       # department 3 is Sales
+    at.selectbox(key="onboard_0_dept").set_value(3).run()
+    assert not at.exception, at.exception
+    roles = next(box for box in at.selectbox if box.label == "Job role")
+    assert "Sales Executive" in roles.options and "Research Scientist" not in roles.options
+    roles.set_value(int(sales[sales.role_name == "Manager"].job_role_id.iloc[0])).run()
+    assert not at.exception, at.exception
+    levels = next(box for box in at.selectbox if box.label == "Job level")
+    assert all(option[0] in "345" for option in levels.options)       # a Manager is level 3 or above
+    at.button_group(key="onboard_0_stock").set_value(2).run()
+    assert not at.exception, at.exception
+    type_a_person(at)
+    at.button[0].click().run()
+    assert not at.exception, at.exception
+    assert not at.warning, [w.value for w in at.warning]
+    assert saved and (saved[0].department_id, saved[0].stock_option_level) == (3, 2)
+
+
+def test_invalid_onboarding_keeps_what_was_typed(monkeypatch):
+    at, _, saved = onboarding_form(monkeypatch)
+    type_a_person(at)
+    next(field for field in at.text_input if field.label == "E-mail").input("not an e-mail address")
+    at.button[0].click().run()
+    assert not at.exception, at.exception
+    assert not saved and not at.success
+    assert any("e-mail" in w.value for w in at.warning)
+    assert next(field for field in at.text_input if field.label == "First name").value == "Asha"

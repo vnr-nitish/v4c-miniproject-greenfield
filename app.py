@@ -12,7 +12,7 @@ import time
 
 import streamlit as st
 
-from src.dal import AnalyticsFilter, AnalyticsManager
+from src.dal import AnalyticsFilter, AnalyticsManager, ReferenceDataManager
 from src.exceptions import HRAppError, PoolBusyError
 from src.ui.common import attempt
 from src.ui.theme import inject_css
@@ -34,6 +34,7 @@ def start_warm_up() -> threading.Thread:
     def keep_warm() -> None:
         while True:
             try:
+                ReferenceDataManager().preload()       # the forms' lists: read once, then this does nothing
                 AnalyticsManager().warm_up()
             except HRAppError as err:                  # the pages report database problems themselves
                 logging.getLogger(__name__).warning("Analytics warm-up paused: %s", err)

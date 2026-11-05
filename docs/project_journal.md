@@ -688,3 +688,11 @@ session reset; Employee 360 reads on one connection; the default views are saved
 
 **Measured from the laptop on the cloud database:** computing and saving everything 69 s; restoring it
 at a restart 1.0 s (2.23 MB); one read 0.445 → 0.226 s; Employee 360's reads 2.2 → 0.73 s.
+
+## Step 28 — Onboarding form, from the user's review of the live site
+
+The form read its lists between one field and the next, so the fields appeared one by one: everything is
+now read first (`ReferenceDataManager.preload()`, `position_picker`), and the lists are also read in the
+background at start. Stock option level is a small 0–3 selector instead of a full-width slider. The balloons
+are gone: a successful onboarding opens a pop-up with the employee code and the warehouse row, and OK
+leaves an empty form. Bad input keeps what was typed.
