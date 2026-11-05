@@ -2,6 +2,7 @@
 departments always have the same colour, risk bands go from green to red."""
 from __future__ import annotations
 
+import textwrap
 from datetime import date
 
 import pandas as pd
@@ -59,6 +60,12 @@ def bars(frame: pd.DataFrame, x: str, y: str, color: str | None = None, horizont
                  color_discrete_sequence=theme.PALETTE)
     fig.update_traces(marker=dict(cornerradius=6), textposition="outside" if text else None)
     fig.update_layout(legend_title_text="", xaxis_title=None, yaxis_title=None, bargap=.25)
+    if color == x:                                  # the axis already names every bar
+        fig.update_layout(showlegend=False)
+    if not horizontal and not pd.api.types.is_numeric_dtype(frame[x]):
+        names = list(dict.fromkeys(frame[x]))       # long names on two lines instead of slanted
+        fig.update_xaxes(tickmode="array", tickvals=names, tickangle=0,
+                         ticktext=[textwrap.fill(str(name), 14).replace("\n", "<br>") for name in names])
     return _finish(fig, 380, title)
 
 
@@ -67,7 +74,7 @@ def leaderboard(top: pd.DataFrame) -> go.Figure:
     data = top.sort_values(["department_name", "department_rank", "avg_kpi"], ascending=[True, False, True])
     data = data.assign(label="#" + data.department_rank.astype(str) + "  " + data.full_name)
     fig = px.bar(data, x="avg_kpi", y="label", color="department_name", orientation="h", facet_col="department_name",
-                 facet_col_spacing=.08, color_discrete_map=theme.DEPARTMENT_COLORS,
+                 facet_col_spacing=.14, color_discrete_map=theme.DEPARTMENT_COLORS,
                  hover_data={"avg_rating": ":.2f", "reviews": True, "label": False})
     fig.update_yaxes(matches=None, showticklabels=True, title=None)
     fig.update_xaxes(title=None, range=[max(0, data.avg_kpi.min() - 5), 100])

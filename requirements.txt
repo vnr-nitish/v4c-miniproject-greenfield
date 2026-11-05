@@ -7,4 +7,5 @@ plotly==7.1.0
 altair==6.3.0
 mysql-connector-python==26.10.0
 python-dotenv==1.2.4
+pyarrow==26.0.0
 pytest==9.1.1

@@ -61,7 +61,9 @@ def _register_template() -> None:
     pio.templates["hr_dark"] = go.layout.Template(layout=dict(
         paper_bgcolor="#111A2E", plot_bgcolor="#111A2E", colorway=PALETTE,
         font=dict(family="Plus Jakarta Sans, sans-serif", color=TEXT), xaxis=axis, yaxis=axis,
-        legend=dict(bgcolor="rgba(0,0,0,0)", orientation="h", y=-0.15), margin=dict(l=16, r=16, t=56, b=16),
+        # placed against the whole chart, so Plotly reserves room and axis labels can't run into the legend
+        legend=dict(bgcolor="rgba(0,0,0,0)", orientation="h", yref="container", y=0, yanchor="bottom"),
+        margin=dict(l=16, r=16, t=56, b=16),
         hoverlabel=dict(bgcolor="#0B1220", bordercolor="#14B8A6", font=dict(color=TEXT))))
     pio.templates.default = "plotly_dark+hr_dark"
 

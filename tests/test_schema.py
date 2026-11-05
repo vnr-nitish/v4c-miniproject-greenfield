@@ -150,10 +150,10 @@ def test_oltp_has_14_tables(cur):
     assert cur.fetchone()[0] == 14
 
 
-def test_dw_has_7_tables(cur):
+def test_dw_has_8_tables(cur):
     cur.execute("SELECT COUNT(*) FROM information_schema.tables "
                 "WHERE table_schema = 'hr_dw' AND table_type = 'BASE TABLE'")
-    assert cur.fetchone()[0] == 7
+    assert cur.fetchone()[0] == 8
 
 
 @pytest.mark.parametrize("table, expected", [

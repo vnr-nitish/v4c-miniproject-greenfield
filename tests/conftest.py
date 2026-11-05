@@ -8,6 +8,8 @@ from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[1]
 
+os.environ["HR_WARM_UP"] = "off"      # no background queries while tests hold every connection
+
 
 @pytest.fixture(scope="session")
 def connection():

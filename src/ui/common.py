@@ -8,13 +8,14 @@ from typing import Any, Callable
 import streamlit as st
 
 from src.dal import AnalyticsFilter, AnalyticsManager
-from src.exceptions import BusinessRuleError, HRAppError, NotFoundError, ValidationError
+from src.exceptions import BusinessRuleError, HRAppError, NotFoundError, PoolBusyError, ValidationError
 from src.ui.theme import TILE_COLORS, inject_css
 
 
-def page_header(title: str, subtitle: str) -> None:
+def page_header(title: str, subtitle: str = "") -> None:
     inject_css()
-    st.markdown(f"<div class='hero'><h1>{title}</h1><p>{subtitle}</p></div>", unsafe_allow_html=True)
+    line = f"<p>{subtitle}</p>" if subtitle else ""
+    st.markdown(f"<div class='hero'><h1>{title}</h1>{line}</div>", unsafe_allow_html=True)
 
 
 def note(text: str) -> None:
@@ -53,7 +54,7 @@ def attempt(action: Callable[[], Any]) -> Any:
     except ValidationError as err:
         st.warning("Please correct the following:\n" + "\n".join(
             f"- **{field.replace('_', ' ').capitalize() or 'Input'}**: {message}" for field, message in err.errors.items()))
-    except (BusinessRuleError, NotFoundError) as err:
+    except (BusinessRuleError, NotFoundError, PoolBusyError) as err:
         st.warning(str(err))
     except HRAppError as err:
         st.error(f"The database could not complete this: {err}")

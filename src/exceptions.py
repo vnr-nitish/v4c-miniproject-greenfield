@@ -3,6 +3,7 @@
     HRAppError
     ├── ConfigurationError   a setting is missing or invalid
     ├── DatabaseError        the database could not do its job (connection, unexpected SQL error)
+    │   └── PoolBusyError        every shared connection stayed in use -> healthy, try again shortly
     ├── ValidationError      input breaks a rule of an entity        -> the user can fix the form
     ├── BusinessRuleError    the database refused the change         -> the user can fix the input
     │   ├── DuplicateError       the record already exists
@@ -27,6 +28,11 @@ class ConfigurationError(HRAppError):
 
 class DatabaseError(HRAppError):
     """A database operation failed (connection, query or transaction)."""
+
+
+class PoolBusyError(DatabaseError):
+    """Every connection of the shared pool stayed in use for the whole wait. The database is fine,
+    so nothing may be repaired or reset because of this."""
 
 
 class ValidationError(HRAppError):

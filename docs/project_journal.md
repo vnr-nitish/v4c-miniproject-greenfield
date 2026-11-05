@@ -670,3 +670,21 @@ Employee 360 examples (≈ 1 s) were queried on every click. **Changed:** the ve
 60 s and refreshed at once after a change made in the app (onboarding, job change, exit, ETL);
 the two lists are cached (5 min, 1 h). Cached calls now take under 1 ms instead of ~0.45 s each.
 `docs/website_guide.md` explains every page, control, rule and data flow. Tests: 228 / 228.
+
+## Step 27 — Live site: crash after waking up, and speed
+
+**Found on the live site:** just after a wake-up, some pages showed "All 3 database connections are
+busy" and Projects and Performance review crashed with `AttributeError`; a moment later all ten pages
+were fine. **Cause (reproduced locally):** the slow queries filled the pool, and `app.py` treated "busy"
+as "not reachable" and reset the pool everyone shares. **Measured slowness:** warm pages took 0.3 s,
+except Employee 360 at 8–10 s and Projects and Operations at 2 s, because each query cost 8 round trips
+at about 0.25 s from the live site. After a wake-up, the cache had to be recomputed for minutes.
+
+**Changed** (`docs/backend_design.md`, B22–B24): busy and broken are separate errors and busy resets
+nothing; one visitor computes a slow result while others wait without a connection; reads skip the
+session reset; Employee 360 reads on one connection; the default views are saved in the new table
+`hr_dw.analytics_snapshot` and read back at start. The table was added to both databases with
+`CREATE TABLE IF NOT EXISTS`; no other data changed.
+
+**Measured from the laptop on the cloud database:** computing and saving everything 69 s; restoring it
+at a restart 1.0 s (2.23 MB); one read 0.445 → 0.226 s; Employee 360's reads 2.2 → 0.73 s.

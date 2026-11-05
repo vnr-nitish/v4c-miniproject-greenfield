@@ -9,8 +9,11 @@ Design (docs/synthesizer_design.md D22, docs/backend_design.md):
   back, via context managers.
 - MySQL errors are translated into the application's exceptions (src/exceptions.py) with a
   message a user can act on, e.g. "This e-mail address is already used by another employee".
-- Several users at once: a request waits briefly for a free connection instead of failing, and
-  a generated key taken by a simultaneous insert is retried (run_with_retry).
+- Several users at once: a request waits for a free connection instead of failing, and a
+  generated key taken by a simultaneous insert is retried (run_with_retry).
+- Reads are cheap: a round trip to the cloud database takes about 0.25 s from the live site, so a
+  read does not reset the session (4 round trips instead of 8), and read_session() lets several
+  reads share one borrowed connection (docs/backend_design.md, B23).
 - rollback_session() pins every manager to one connection whose work is always rolled back —
   used by the tests, so they can exercise the real data without ever changing it.
 """
@@ -33,7 +36,7 @@ from dotenv import load_dotenv
 from mysql.connector import pooling
 
 from src.exceptions import (BusinessRuleError, ConfigurationError, DatabaseError, DuplicateError, HRAppError,
-                            ValidationError)
+                            PoolBusyError, ValidationError)
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +78,13 @@ _INPUT_ERRORS = {1048, 1264, 1265, 1292, 1366, 1406}
 # "CONSTRAINT `fk_reviews_project` FOREIGN KEY" (1451 / 1452), "Check constraint 'ck_…'" (3819)
 _CONSTRAINT_NAME = re.compile(r"(?:for key '(?:\w+\.)?|CONSTRAINT `|[Cc]heck constraint ')(\w+)")
 
+# Connecting: can't reach the server, connection lost, secure handshake failed
+_NETWORK_ERRORS = {2003, 2006, 2013, 2026, 2055}
+_CONNECT_ATTEMPTS = 4
+_CONNECT_PAUSE_SECONDS = 3
+
 _pinned = threading.local()           # the connection of an active rollback_session, per thread
+_reads = threading.local()            # the connection of an active read_session, per thread
 
 T = TypeVar("T")
 
@@ -118,7 +127,7 @@ class DatabaseSettings:
     user: str
     password: str
     pool_size: int = 5
-    pool_wait_seconds: float = 10.0          # how long a request waits when every connection is busy
+    pool_wait_seconds: float = 60.0          # how long a request waits when every connection is busy
 
     @classmethod
     def from_env(cls, env_file: Path | None = None) -> "DatabaseSettings":
@@ -131,7 +140,7 @@ class DatabaseSettings:
                 user=os.environ["DB_USER"],
                 password=os.environ["DB_PASSWORD"],
                 pool_size=int(os.getenv("DB_POOL_SIZE", "5")),
-                pool_wait_seconds=float(os.getenv("DB_POOL_WAIT", "10")),
+                pool_wait_seconds=float(os.getenv("DB_POOL_WAIT", "60")),
             )
         except KeyError as missing:
             raise ConfigurationError(f"Missing database setting {missing} (see .env.example)") from None
@@ -144,7 +153,7 @@ class DatabaseConnection:
 
     _instances: dict[type, "DatabaseConnection"] = {}
     _pool: pooling.MySQLConnectionPool | None = None
-    _pool_wait: float = 10.0
+    _pool_wait: float = 60.0
     _lock = threading.RLock()
 
     def __new__(cls, *args: Any, **kwargs: Any) -> "DatabaseConnection":
@@ -154,29 +163,43 @@ class DatabaseConnection:
             return DatabaseConnection._instances[cls]
 
     def __init__(self, settings: DatabaseSettings | None = None) -> None:
-        with DatabaseConnection._lock:
-            if DatabaseConnection._pool is None:
-                settings = settings or DatabaseSettings.from_env()
-                DatabaseConnection._pool = self._create_pool(settings)
-                DatabaseConnection._pool_wait = settings.pool_wait_seconds
+        self._shared_pool(settings)
 
     # ------------------------------------------------------------------ pool management
 
     @staticmethod
+    def _shared_pool(settings: DatabaseSettings | None = None) -> pooling.MySQLConnectionPool:
+        """The one pool, created on first use — and again if reset() removed it while another
+        visitor's page was still running."""
+        with DatabaseConnection._lock:
+            if DatabaseConnection._pool is None:
+                settings = settings or DatabaseSettings.from_env()
+                DatabaseConnection._pool = DatabaseConnection._create_pool(settings)
+                DatabaseConnection._pool_wait = settings.pool_wait_seconds
+            return DatabaseConnection._pool
+
+    @staticmethod
     def _create_pool(settings: DatabaseSettings) -> pooling.MySQLConnectionPool:
-        try:
-            pool = pooling.MySQLConnectionPool(
-                pool_name="hr_app_pool",
-                pool_size=settings.pool_size,
-                pool_reset_session=True,
-                host=settings.host,
-                port=settings.port,
-                user=settings.user,
-                password=settings.password,
-                autocommit=False,
-            )
-        except mysql.connector.Error as err:
-            raise DatabaseError(f"Could not connect to MySQL at {settings.host}:{settings.port}: {err}") from err
+        """Network hiccups while connecting are seen on the cloud database and pass within seconds,
+        so they are tried again. Anything else, such as a wrong password, is reported at once."""
+        for attempt in range(1, _CONNECT_ATTEMPTS + 1):
+            try:
+                pool = pooling.MySQLConnectionPool(
+                    pool_name="hr_app_pool",
+                    pool_size=settings.pool_size,
+                    pool_reset_session=False,        # connection() resets after writes; reads skip the 4 round trips
+                    host=settings.host,
+                    port=settings.port,
+                    user=settings.user,
+                    password=settings.password,
+                    autocommit=False,
+                )
+                break
+            except mysql.connector.Error as err:
+                if err.errno not in _NETWORK_ERRORS or attempt == _CONNECT_ATTEMPTS:
+                    raise DatabaseError(f"Could not connect to MySQL at {settings.host}:{settings.port}: {err}") from err
+                logger.warning("Connecting failed (attempt %s of %s): %s", attempt, _CONNECT_ATTEMPTS, err)
+                time.sleep(_CONNECT_PAUSE_SECONDS)
         logger.info("Connection pool created (%s connections) for %s@%s",
                     settings.pool_size, settings.user, settings.host)
         return pool
@@ -191,15 +214,21 @@ class DatabaseConnection:
     # ------------------------------------------------------------------ connections and transactions
 
     @contextmanager
-    def connection(self) -> Iterator[Any]:
+    def connection(self, read_only: bool = False) -> Iterator[Any]:
         """Borrow a pooled connection; it is always returned to the pool.
 
         When every connection is in use (several dashboard users at once), the request waits up
         to `pool_wait_seconds` for one to be returned instead of failing at once. A connection
         the server has closed is reconnected by the pool itself. Inside a rollback_session the
-        session's pinned connection is used instead.
+        session's pinned connection is used instead; a read inside a read_session uses that one.
+
+        Anything but a read may leave session state behind (a procedure's variables and temporary
+        tables, a script's settings), so the session is reset before the connection goes back.
+        A read changes nothing there and skips this.
         """
         pinned = getattr(_pinned, "connection", None)
+        if pinned is None and read_only:
+            pinned = getattr(_reads, "connection", None)
         if pinned is not None:
             yield pinned
             return
@@ -207,17 +236,24 @@ class DatabaseConnection:
         try:
             yield conn
         finally:
-            conn.close()            # returns the connection to the pool
+            try:
+                if not read_only:
+                    conn.reset_session()
+            except mysql.connector.Error as err:      # the work is done; the pool reconnects a dead connection
+                logger.warning("Session reset failed: %s", err)
+            finally:
+                conn.close()        # returns the connection to the pool
 
     @staticmethod
     def _borrow() -> Any:
+        pool = DatabaseConnection._shared_pool()
         deadline = time.monotonic() + DatabaseConnection._pool_wait
         while True:
             try:
-                return DatabaseConnection._pool.get_connection()
+                return pool.get_connection()
             except mysql.connector.errors.PoolError as err:          # all connections in use
                 if time.monotonic() >= deadline:
-                    raise DatabaseError(f"All {DatabaseConnection._pool.pool_size} database connections are "
+                    raise PoolBusyError(f"All {pool.pool_size} database connections are "
                                         "busy — please try again in a moment") from err
                 time.sleep(0.05)
             except mysql.connector.Error as err:
@@ -242,18 +278,23 @@ class DatabaseConnection:
         raise AssertionError("unreachable")
 
     @contextmanager
-    def transaction(self, dictionary: bool = False) -> Iterator[Any]:
+    def transaction(self, dictionary: bool = False, read_only: bool = False) -> Iterator[Any]:
         """Run a unit of work: commit on success, roll back on any error.
 
         MySQL errors are re-raised as application exceptions (translate_error). Inside a
         rollback_session the unit of work is a SAVEPOINT instead, so a failed step is undone
         without losing the session's earlier steps — and nothing is ever committed.
+
+        read_only marks a unit that only SELECTs (see connection()). The commit still happens: it
+        ends the read's snapshot, so the next user of the connection sees new data. In a session
+        the session ends it, and a failed read has nothing to undo.
         """
-        with self.connection() as conn:
+        with self.connection(read_only) as conn:
             pinned = conn is getattr(_pinned, "connection", None)
+            shared = pinned or conn is getattr(_reads, "connection", None)
             cursor = conn.cursor(dictionary=dictionary)
             savepoint = None
-            if pinned:
+            if pinned and not read_only:
                 _pinned.depth += 1
                 savepoint = f"dal_unit_{_pinned.depth}"
                 cursor.execute(f"SAVEPOINT {savepoint}")
@@ -261,13 +302,15 @@ class DatabaseConnection:
                 yield cursor
                 if savepoint:
                     cursor.execute(f"RELEASE SAVEPOINT {savepoint}")
-                else:
+                elif not shared:
                     conn.commit()
             except mysql.connector.Error as err:
-                self._undo(conn, cursor, savepoint)
+                if savepoint or not shared:
+                    self._undo(conn, cursor, savepoint)
                 raise translate_error(err) from err
             except Exception:
-                self._undo(conn, cursor, savepoint)
+                if savepoint or not shared:
+                    self._undo(conn, cursor, savepoint)
                 raise
             finally:
                 if savepoint:
@@ -309,23 +352,43 @@ class DatabaseConnection:
                 _pinned.connection = None
                 conn.rollback()
 
+    @classmethod
+    @contextmanager
+    def read_session(cls) -> Iterator[None]:
+        """Run several reads on ONE borrowed connection, e.g. everything a page shows about one
+        employee: the pool check and the commit happen once instead of for every query.
+
+        The reads see one consistent state of the data. A write inside the session is not part
+        of it: it borrows its own connection and commits as usual.
+        """
+        if cls.in_rollback_session() or getattr(_reads, "connection", None) is not None:
+            yield                                     # already on one connection
+            return
+        with DatabaseConnection().connection(read_only=True) as conn:
+            _reads.connection = conn
+            try:
+                yield
+            finally:
+                _reads.connection = None
+                cls._undo(conn, None, None)           # ends the snapshot before the connection goes back
+
     # ------------------------------------------------------------------ convenience helpers
 
     def fetch_all(self, sql: str, params: Sequence[Any] | dict | None = None,
                   dictionary: bool = True) -> list:
-        with self.transaction(dictionary=dictionary) as cur:
+        with self.transaction(dictionary=dictionary, read_only=True) as cur:
             cur.execute(sql, params)
             return cur.fetchall()
 
     def fetch_one(self, sql: str, params: Sequence[Any] | dict | None = None,
                   dictionary: bool = True) -> Any:
-        with self.transaction(dictionary=dictionary) as cur:
+        with self.transaction(dictionary=dictionary, read_only=True) as cur:
             cur.execute(sql, params)
             return cur.fetchone()
 
     def fetch_frame(self, sql: str, params: Sequence[Any] | dict | None = None) -> pd.DataFrame:
         """Run a query and return a DataFrame (DECIMAL columns as floats, ready for charts)."""
-        with self.transaction() as cur:
+        with self.transaction(read_only=True) as cur:
             return self.frame_in(cur, sql, params)
 
     @staticmethod
