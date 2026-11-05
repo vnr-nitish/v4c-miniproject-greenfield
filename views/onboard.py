@@ -1,6 +1,7 @@
 """Onboard a new employee: OLTP rows + the first SCD Type 2 version in the warehouse, in one transaction."""
 from datetime import date, timedelta
 
+import pandas as pd
 import streamlit as st
 
 from src.dal import EmployeeManager, ReferenceDataManager
@@ -13,12 +14,29 @@ if not editor_unlocked():
     st.stop()
 ref = ReferenceDataManager()
 
+
+@st.dialog("Employee onboarded", width="large", dismissible=False)
+def welcome(hired: Employee, versions: pd.DataFrame) -> None:
+    st.success(f"Welcome aboard, {hired.full_name} — employee code **{hired.employee_code}**.")
+    st.markdown("Warehouse row created in the same transaction (`dim_employee`, SCD Type 2 version 1):")
+    st.dataframe(versions, hide_index=True, width="stretch")
+    st.caption(f"Open **Employee 360** with code {hired.employee_code} to change their position.")
+    if st.button("OK", type="primary", key="onboard_ok"):
+        st.rerun()                                # closes the pop-up; the form behind it is already empty
+
+
+if "onboarded" in st.session_state:
+    welcome(*st.session_state.pop("onboarded"))
+
+# Every field's key carries this number: a new number means new, empty fields
+form_number = st.session_state.setdefault("onboard_form_number", 0)
+
 st.markdown("#### 1 · Position")
-position = position_picker("onboard")
+position = position_picker(f"onboard_{form_number}")
 
 st.markdown("#### 2 · Person")
 education_levels, education_fields = ref.education_levels(), ref.education_fields()
-with st.form("onboard_form", clear_on_submit=False):
+with st.form(f"onboard_form_{form_number}", clear_on_submit=False):
     c1, c2, c3 = st.columns(3)
     first_name, last_name = c1.text_input("First name"), c2.text_input("Last name")
     email, phone = c3.text_input("E-mail"), c1.text_input("Phone", placeholder="+91 98765 43210")
@@ -46,9 +64,8 @@ if submitted:
     hired = attempt(onboard)
     if hired:
         data_changed()
-        st.success(f"Welcome aboard, {hired.full_name} — employee code **{hired.employee_code}**.")
-        st.balloons()
-        st.markdown("Warehouse row created in the same transaction (`dim_employee`, SCD Type 2 version 1):")
-        st.dataframe(EmployeeManager().history(hired.employee_id), hide_index=True, width="stretch")
-        st.caption(f"Open **Employee 360** with code {hired.employee_code} to change their position.")
+        versions = attempt(lambda: EmployeeManager().history(hired.employee_id))
+        st.session_state["onboarded"] = (hired, pd.DataFrame() if versions is None else versions)
+        st.session_state["onboard_form_number"] = form_number + 1
+        st.rerun()
 st.caption(f"Tip: hire dates up to {date.today() - timedelta(days=1)} let you try a job change the same day.")

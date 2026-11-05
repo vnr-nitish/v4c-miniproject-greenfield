@@ -9,6 +9,7 @@ import streamlit as st
 
 from src.dal import AnalyticsFilter, AnalyticsManager
 from src.exceptions import BusinessRuleError, HRAppError, NotFoundError, PoolBusyError, ValidationError
+from src.ui.forms import _manager_candidates
 from src.ui.theme import TILE_COLORS, inject_css
 
 
@@ -39,8 +40,10 @@ def tiles(items: list[tuple[str, str, float | None, bool]]) -> None:
 
 
 def data_changed() -> None:
-    """This page just changed the warehouse: dashboards re-check its version on the next visit."""
+    """This page just changed the warehouse: dashboards re-check its version on the next visit,
+    and the manager drop-downs read the people again."""
     AnalyticsManager().refresh_version()
+    _manager_candidates.clear()
 
 
 def current_filters() -> AnalyticsFilter:

@@ -40,6 +40,15 @@ class ReferenceDataManager(DatabaseConnection):
     def refresh(self) -> None:
         self._cache.clear()
 
+    def preload(self) -> None:
+        """Read every list that is not cached yet, on one connection, so a form can draw all its
+        fields together instead of reading a list between one field and the next."""
+        missing = [name for name in _QUERIES if name not in self._cache]
+        if missing:
+            with self.read_session():
+                for name in missing:
+                    self._lookup(name)
+
     def departments(self) -> pd.DataFrame:
         return self._lookup("departments")
 
