@@ -4,11 +4,9 @@ import streamlit as st
 
 from src.dal import AnalyticsManager
 from src.ui import charts, theme
-from src.ui.common import attempt, current_filters, note, page_header, tiles
+from src.ui.common import attempt, current_filters, page_header, tiles
 
-page_header("HR Analytics Command Centre",
-            "100,000 employees · 7 review cycles · live forms on the OLTP database and dashboards on the "
-            "star-schema warehouse with SCD Type 2 history")
+page_header("HR Analytics Command Centre")
 am = AnalyticsManager()
 filters = current_filters()
 
@@ -49,5 +47,3 @@ if workforce is not None:
         employees=("employee_id", "size"), avg_income=("monthly_income", "mean"))
     right.plotly_chart(charts.bars(per_dept, "department_name", "employees", "department_name",
                                    title="Headcount by department", text="employees"), width="stretch")
-    note("Click a tile of the treemap to zoom into a department; the colour shows where high attrition risk "
-         "is concentrated. Every chart follows the filters in the sidebar.")

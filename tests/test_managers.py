@@ -20,10 +20,10 @@ import pytest
 
 from src.dal import (AnalyticsFilter, AnalyticsManager, EmployeeManager, EtlManager, ProjectManager,
                      ReferenceDataManager, ReviewManager, SchemaManager)
-from src.dal.analytics_manager import MAX_RISK_SCORE, RISK_BANDS, RISK_FACTORS
-from src.db_manager import DatabaseConnection
+from src.dal.analytics_manager import MAX_RISK_SCORE, RISK_BANDS, RISK_FACTORS, _from_bytes, _to_bytes, _warming
+from src.db_manager import DatabaseConnection, DatabaseSettings
 from src.exceptions import (BusinessRuleError, DatabaseError, DuplicateError, HRAppError, NotFoundError,
-                            OverAllocationError, ValidationError)
+                            OverAllocationError, PoolBusyError, ValidationError)
 from src.models import Assignment, Employee, Position, Project, Review
 from src.models.review import RATING_LABELS
 
@@ -164,8 +164,133 @@ def test_a_pool_busy_for_too_long_gives_a_clear_error(monkeypatch):
     monkeypatch.setattr(DatabaseConnection, "_pool_wait", 0.3)
     held = hold_every_connection()
     try:
-        with pytest.raises(DatabaseError, match="connections are busy"):
+        with pytest.raises(PoolBusyError, match="connections are busy"):     # also a DatabaseError
             value("SELECT 1 AS one")
+    finally:
+        for conn in held:
+            conn.close()
+
+
+def test_a_request_survives_a_pool_removed_by_another_visitor():
+    """Decision B22: reset() in one visitor's run must not break the page of another."""
+    manager = EmployeeManager()
+    DatabaseConnection._pool = None
+    assert manager.fetch_one("SELECT 1 AS one")["one"] == 1
+    assert DatabaseConnection._pool is not None
+
+
+def pool_that_fails(monkeypatch, errors: list) -> list:
+    """Replace the driver's pool: each creation raises the next error, then succeeds."""
+    calls = []
+
+    def create(**settings):
+        calls.append(settings)
+        if errors:
+            raise errors.pop(0)
+        return "the pool"
+
+    monkeypatch.setattr("src.db_manager.pooling.MySQLConnectionPool", create)
+    monkeypatch.setattr("src.db_manager._CONNECT_PAUSE_SECONDS", 0)
+    return calls
+
+
+SETTINGS = DatabaseSettings(host="cloud", port=1, user="u", password="p")
+
+
+def test_a_network_hiccup_while_connecting_is_tried_again(monkeypatch):
+    """Seen on the cloud database: errors 2013 and 2026 that were gone seconds later."""
+    calls = pool_that_fails(monkeypatch, [mysql.connector.Error(errno=2013), mysql.connector.Error(errno=2026)])
+    assert DatabaseConnection._create_pool(SETTINGS) == "the pool"
+    assert len(calls) == 3
+
+
+def test_a_wrong_password_is_not_tried_again(monkeypatch):
+    calls = pool_that_fails(monkeypatch, [mysql.connector.Error(errno=1045)])
+    with pytest.raises(DatabaseError):
+        DatabaseConnection._create_pool(SETTINGS)
+    assert len(calls) == 1
+
+
+def test_a_network_problem_that_stays_is_reported(monkeypatch):
+    calls = pool_that_fails(monkeypatch, [mysql.connector.Error(errno=2003) for _ in range(10)])
+    with pytest.raises(DatabaseError):
+        DatabaseConnection._create_pool(SETTINGS)
+    assert len(calls) == 4
+
+
+def test_a_write_leaves_no_session_state_behind():
+    with DatabaseConnection().transaction() as cur:
+        cur.execute("SET @left_behind = 1")
+    held = hold_every_connection()
+    try:
+        for conn in held:
+            cur = conn.cursor()
+            cur.execute("SELECT @left_behind")
+            assert cur.fetchone()[0] is None
+            cur.close()
+    finally:
+        for conn in held:
+            conn.rollback()
+            conn.close()
+
+
+def test_a_read_skips_the_session_reset():
+    """Decision B23: the reset was 4 of a read's 8 round trips. A variable surviving proves it is gone."""
+    mark = uuid4().hex
+    value("SELECT @read_mark := %s AS mark", (mark,))
+    held = hold_every_connection()
+    try:
+        found = []
+        for conn in held:
+            cur = conn.cursor()
+            cur.execute("SELECT @read_mark")
+            found.append(cur.fetchone()[0])
+            cur.close()
+        assert mark in found
+    finally:
+        for conn in held:
+            conn.rollback()
+            conn.close()
+
+
+def count_borrows(monkeypatch) -> list:
+    borrows, borrow = [], DatabaseConnection._borrow
+    monkeypatch.setattr(DatabaseConnection, "_borrow", staticmethod(lambda: borrows.append(1) or borrow()))
+    return borrows
+
+
+def test_a_read_session_shares_one_connection(monkeypatch):
+    borrows = count_borrows(monkeypatch)
+    with DatabaseConnection.read_session():
+        assert value("SELECT 1 AS one") == 1
+        assert value("SELECT 2 AS two") == 2
+        assert EmployeeManager().example_codes(1)
+        with DatabaseConnection.read_session():              # nesting stays on the same connection
+            assert value("SELECT 3 AS three") == 3
+    assert len(borrows) == 1
+
+
+def test_a_write_inside_a_read_session_gets_its_own_connection(monkeypatch):
+    borrows = count_borrows(monkeypatch)
+    with DatabaseConnection.read_session():
+        with DatabaseConnection().transaction() as cur:
+            cur.execute("SELECT 1")
+            cur.fetchall()
+    assert len(borrows) == 2
+
+
+def test_reads_end_their_transaction():
+    """A connection going back with an open snapshot would show the next visitor old data."""
+    value("SELECT 1 AS one")
+    with DatabaseConnection.read_session():
+        value("SELECT 1 AS one")
+    with pytest.raises(DatabaseError):
+        value("SELECT * FROM hr_dw.no_such_table")
+    with pytest.raises(NotFoundError), DatabaseConnection.read_session():
+        EmployeeManager().get_by_code("EMP-NOBODY")
+    held = hold_every_connection()
+    try:
+        assert not any(conn.in_transaction for conn in held)
     finally:
         for conn in held:
             conn.close()
@@ -642,6 +767,150 @@ def test_cached_results_are_copies(analytics):
     first = analytics.yoy_trends()
     first.loc[0, "reviews"] = -1
     assert analytics.yoy_trends().reviews.iloc[0] > 0
+
+
+def must_not_run():
+    raise AssertionError("this result should not have been computed")
+
+
+def test_one_visitor_computes_a_slow_result_and_the_others_wait(analytics):
+    """Decision B22: ten visitors of a slow page used to run ten copies of its query."""
+    calls, results, key = [], [], ("slow", uuid4().hex)
+
+    def slow():
+        calls.append(1)
+        time.sleep(0.3)
+        return pd.DataFrame({"n": [1]})
+
+    visitors = [threading.Thread(target=lambda: results.append(analytics._cached(key, slow))) for _ in range(10)]
+    for visitor in visitors:
+        visitor.start()
+    for visitor in visitors:
+        visitor.join()
+    assert len(calls) == 1 and len(results) == 10
+    assert not analytics._computing
+
+
+def test_a_failed_computation_is_not_remembered(analytics):
+    key = ("flaky", uuid4().hex)
+
+    def fail():
+        raise DatabaseError("connection lost")
+
+    with pytest.raises(DatabaseError):
+        analytics._cached(key, fail)
+    assert analytics._cached(key, lambda: 42) == 42
+
+
+@pytest.fixture
+def saved_state(analytics):
+    """The tests below change what the manager restored; put it back."""
+    before = analytics._saved, analytics._saved_version, analytics._warm_version
+    yield
+    with analytics._cache_lock:
+        analytics._saved, analytics._saved_version, analytics._warm_version = before
+
+
+def saved_earlier(analytics, key, days=0, batches=0) -> pd.DataFrame:
+    version = analytics.data_version()
+    frame = pd.DataFrame({"n": [1]})
+    analytics._saved = {repr(key): frame}
+    analytics._saved_version = (version[0] - batches, version[1] - timedelta(days=days))
+    return frame
+
+
+def test_saved_results_come_back_unchanged(analytics):
+    for frame in (analytics.scored_workforce(), analytics.yoy_trends(), analytics.risk_backtest(),
+                  analytics.attrition_trend(), analytics.bottleneck_projects(limit=500)):
+        pd.testing.assert_frame_equal(_from_bytes(_to_bytes(frame)), frame)
+
+
+def test_results_saved_today_are_used_without_a_query(analytics, saved_state):
+    key = ("saved today", uuid4().hex)
+    frame = saved_earlier(analytics, key)
+    pd.testing.assert_frame_equal(analytics._cached(key, must_not_run), frame)
+    assert (analytics.data_version(),) + key in analytics._cache
+
+
+def test_results_of_an_earlier_day_serve_visitors_until_the_warm_up_replaces_them(analytics, saved_state):
+    key = ("saved yesterday", uuid4().hex)
+    frame = saved_earlier(analytics, key, days=1)
+    pd.testing.assert_frame_equal(analytics._cached(key, must_not_run), frame)
+    assert (analytics.data_version(),) + key not in analytics._cache
+
+    fresh = pd.DataFrame({"n": [2]})
+    _warming.results = {}
+    try:
+        pd.testing.assert_frame_equal(analytics._cached(key, lambda: fresh), fresh)   # the warm-up computes
+        assert repr(key) in _warming.results
+    finally:
+        del _warming.results
+    pd.testing.assert_frame_equal(analytics._cached(key, must_not_run), fresh)        # visitors now get that
+
+
+def test_results_of_another_batch_are_never_used(analytics, saved_state):
+    key = ("old batch", uuid4().hex)
+    saved_earlier(analytics, key, batches=1)
+    assert analytics._cached(key, lambda: 42) == 42
+
+
+def test_warm_up_saves_the_default_views_and_a_restart_brings_them_back(analytics, saved_state, monkeypatch):
+    version = analytics.data_version()
+    analytics._warm_version = ()
+    try:
+        analytics.warm_up()
+        assert analytics._warm_version == version
+        saved_rows = value("SELECT COUNT(*) AS n FROM hr_dw.analytics_snapshot WHERE batch_id = %s", (version[0],))
+        assert saved_rows >= 9
+
+        analytics.clear_cache()                                   # the app restarts ...
+        analytics.restore_results()
+        assert analytics._warm_version == version                 # ... saved today: nothing to recompute
+        cycles = tuple(analytics.filter_options()["fiscal_years"][-3:])
+        monkeypatch.setattr(analytics, "fetch_frame", must_not_run)
+        everyone = AnalyticsFilter()
+        analytics.scored_workforce()                              # exactly what the pages ask for
+        analytics.risk_backtest()
+        analytics.yoy_trends(everyone)
+        analytics.yoy_trends(everyone, by_department=True)
+        analytics.attrition_trend(everyone)
+        analytics.role_trends(everyone, "overtime_pct")
+        analytics.bottleneck_projects(everyone, limit=500)
+        analytics.project_delivery(everyone, by="priority")
+        analytics.top_performers(AnalyticsFilter(fiscal_years=cycles), top_n=5, min_reviews=2, active_only=True)
+    finally:
+        DatabaseConnection().execute("DELETE FROM hr_dw.analytics_snapshot")
+
+
+def test_warm_up_does_nothing_while_the_version_is_unchanged(analytics, saved_state, monkeypatch):
+    analytics._warm_version = analytics.data_version()
+    monkeypatch.setattr(analytics, "filter_options", must_not_run)
+    analytics.warm_up()
+
+
+def test_results_of_older_code_are_ignored(analytics, saved_state, monkeypatch):
+    version = analytics.data_version()
+    analytics._save_results(version, {repr(("x",)): pd.DataFrame({"n": [1]})})
+    try:
+        analytics._saved, analytics._saved_version, analytics._warm_version = {}, (), ()
+        monkeypatch.setattr("src.dal.analytics_manager._CODE_VERSION", "another version of the code")
+        analytics.restore_results()
+        assert not analytics._saved and analytics._warm_version == ()
+    finally:
+        DatabaseConnection().execute("DELETE FROM hr_dw.analytics_snapshot")
+
+
+def test_a_missing_results_table_only_costs_speed(analytics, saved_state, monkeypatch):
+    analytics._saved, analytics._saved_version, analytics._warm_version = {}, (), ()
+
+    def no_table(*args, **kwargs):
+        raise DatabaseError("1146: Table 'hr_dw.analytics_snapshot' doesn't exist")
+
+    monkeypatch.setattr(analytics, "fetch_all", no_table)
+    analytics.restore_results()                                   # logged, not raised
+    assert not analytics._saved
+    monkeypatch.setattr(analytics, "transaction", no_table)
+    analytics._save_results(analytics.data_version(), {})         # logged, not raised
 
 
 def test_cache_is_bypassed_in_a_rollback_session(picks, analytics):

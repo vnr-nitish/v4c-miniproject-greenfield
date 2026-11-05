@@ -76,7 +76,7 @@ class ReviewManager(DatabaseConnection):
         """Defaults for the review form: the reviewer is the employee's manager at the end of the
         review year (or today, if earlier); the project is their main assignment that year
         (highest allocation) — the same rule the synthesizer used."""
-        with self.transaction(dictionary=True) as cur:
+        with self.transaction(dictionary=True, read_only=True) as cur:
             cur.execute("SELECT LEAST(CURDATE(), %s) AS day", (date(review_year, 12, 31),))
             day = cur.fetchone()["day"]
             cur.execute(

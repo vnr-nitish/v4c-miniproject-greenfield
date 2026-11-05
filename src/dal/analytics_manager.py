@@ -19,23 +19,39 @@ gender) are deliberately left out even where they correlate with attrition.
 Results are cached per warehouse version: the id of the latest finished ETL batch (every change
 to hr_dw — an ETL run, an SCD Type 2 apply, a project deletion — is a logged batch) and the
 date. A new batch makes every older entry unreachable, so the cache never serves stale results.
+
+The slow results behind the pages' default views are also saved in hr_dw.analytics_snapshot, so
+an app that was asleep brings them back in seconds instead of recomputing them for minutes
+(docs/backend_design.md, B24). Results saved for an older batch or by other code are never used;
+results saved on an earlier day (only dates like "today" differ) serve the pages until the
+background warm-up has replaced them.
 """
 from __future__ import annotations
 
+import hashlib
+import io
+import logging
 import re
 import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 import pandas as pd
 
 from src.db_manager import DatabaseConnection
-from src.exceptions import ValidationError
+from src.exceptions import HRAppError, ValidationError
+
+logger = logging.getLogger(__name__)
 
 _FISCAL_YEAR = re.compile(r"FY\d{4}-\d{2}")
 _CACHE_SIZE = 128
+# Saved results belong to the code that made them: a changed query must not be served old rows
+_CODE_VERSION = hashlib.sha256(Path(__file__).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+_warming = threading.local()          # the results the warm-up thread has touched in its current pass
 
 
 @dataclass(frozen=True)
@@ -191,16 +207,34 @@ def _copy(value: Any) -> Any:
     return value
 
 
+def _to_bytes(frame: pd.DataFrame) -> bytes:
+    """A result as compressed Parquet: small, keeps the column types and, unlike pickle, reading
+    it back cannot run code."""
+    buffer = io.BytesIO()
+    frame.to_parquet(buffer, compression="zstd", index=False)
+    return buffer.getvalue()
+
+
+def _from_bytes(payload: bytes) -> pd.DataFrame:
+    return pd.read_parquet(io.BytesIO(payload))
+
+
 class AnalyticsManager(DatabaseConnection):
     """Read-only analytics over the star schema, cached per warehouse version."""
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        if not hasattr(self, "_cache"):           # a Singleton: __init__ runs on every AnalyticsManager()
-            self._cache: OrderedDict[tuple, Any] = OrderedDict()
-            self._cache_lock = threading.Lock()
-            self._version: tuple = ()
-            self._version_at = float("-inf")
+        with DatabaseConnection._lock:            # the warm-up thread and the first visitor arrive together
+            if not hasattr(self, "_cache"):       # a Singleton: __init__ runs on every AnalyticsManager()
+                self._cache: OrderedDict[tuple, Any] = OrderedDict()
+                self._cache_lock = threading.Lock()
+                self._computing: dict[tuple, threading.Lock] = {}
+                self._version: tuple = ()
+                self._version_at = float("-inf")
+                self._version_lock = threading.Lock()
+                self._saved: dict[str, pd.DataFrame] = {}
+                self._saved_version: tuple = ()
+                self._warm_version: tuple = ()
 
     # ------------------------------------------------------------------ cache
 
@@ -210,21 +244,33 @@ class AnalyticsManager(DatabaseConnection):
         """(latest finished batch id, today). A batch's status leaves STARTED in the same commit
         as its data, so a query running during an ETL can never be cached as the new version.
 
-        The answer is reused for VERSION_TTL_SECONDS: asking the database costs a network round
-        trip (about 0.45 s to the cloud database), and every cached chart needs the version.
-        Changes made through this application call refresh_version(), so they show at once;
-        changes made elsewhere (an ETL from the command line) show within a minute.
+        The answer is reused for VERSION_TTL_SECONDS: asking the database costs network round
+        trips, and every cached chart needs the version. When it has expired one visitor asks and
+        the others keep using the last answer. Changes made through this application call
+        refresh_version(), so they show at once; changes made elsewhere (an ETL from the command
+        line) show within a minute.
         """
+        if self.in_rollback_session():           # uncommitted data: never remembered
+            return tuple(self._read_version())
         now = time.monotonic()
-        if not fresh and not self.in_rollback_session() and now - self._version_at < self.VERSION_TTL_SECONDS:
+        if not fresh and now - self._version_at < self.VERSION_TTL_SECONDS:
             return self._version
-        row = self.fetch_one(
+        must_wait = fresh or self._version_at == float("-inf")
+        if not self._version_lock.acquire(blocking=must_wait):
+            return self._version
+        try:
+            now = time.monotonic()
+            if not fresh and now - self._version_at < self.VERSION_TTL_SECONDS:
+                return self._version             # another visitor asked while this one waited
+            self._version, self._version_at = tuple(self._read_version()), now
+            return self._version
+        finally:
+            self._version_lock.release()
+
+    def _read_version(self) -> Any:
+        return self.fetch_one(
             "SELECT COALESCE(MAX(batch_id), 0), CURDATE() FROM hr_dw.etl_batch_log "
             "WHERE log_id = batch_id AND status <> 'STARTED'", dictionary=False)
-        if self.in_rollback_session():           # uncommitted data: never remembered
-            return tuple(row)
-        self._version, self._version_at = tuple(row), now
-        return self._version
 
     def refresh_version(self) -> None:
         """The warehouse was just changed by this application: check the version on the next call."""
@@ -233,21 +279,109 @@ class AnalyticsManager(DatabaseConnection):
     def clear_cache(self) -> None:
         with self._cache_lock:
             self._cache.clear()
+            self._saved, self._saved_version, self._warm_version = {}, (), ()
 
     def _cached(self, key: tuple, compute: Callable[[], Any]) -> Any:
         if self.in_rollback_session():            # uncommitted data must never reach the shared cache
             return compute()
-        key = (self.data_version(),) + key
-        with self._cache_lock:
-            if key in self._cache:
-                self._cache.move_to_end(key)
-                return _copy(self._cache[key])
-        result = compute()                        # outside the lock: other queries can be served meanwhile
-        with self._cache_lock:
-            self._cache[key] = result
-            while len(self._cache) > _CACHE_SIZE:
-                self._cache.popitem(last=False)
+        result = self._result_for(self.data_version(), key, compute)
+        warmed = getattr(_warming, "results", None)
+        if warmed is not None:
+            warmed[repr(key)] = result
         return _copy(result)
+
+    def _result_for(self, version: tuple, key: tuple, compute: Callable[[], Any]) -> Any:
+        """From the cache, from the saved results, or computed — by one visitor only: others asking
+        for the same result wait for it without holding a database connection."""
+        cache_key = (version,) + key
+        with self._cache_lock:
+            if cache_key in self._cache:
+                self._cache.move_to_end(cache_key)
+                return self._cache[cache_key]
+            saved = self._saved.get(repr(key)) if self._saved_version[:1] == version[:1] else None
+            if saved is not None and self._saved_version == version:
+                self._remember(cache_key, saved)
+                return saved
+            if saved is not None and not hasattr(_warming, "results"):
+                return saved                      # from an earlier day: the warm-up is replacing it
+            turn = self._computing.setdefault(cache_key, threading.Lock())
+        with turn:
+            with self._cache_lock:
+                if cache_key in self._cache:      # computed while this visitor waited for its turn
+                    return self._cache[cache_key]
+            try:
+                result = compute()                # outside the cache lock: other results can be served meanwhile
+                with self._cache_lock:
+                    self._remember(cache_key, result)
+                return result
+            finally:
+                with self._cache_lock:
+                    self._computing.pop(cache_key, None)
+
+    def _remember(self, cache_key: tuple, result: Any) -> None:
+        self._cache[cache_key] = result
+        while len(self._cache) > _CACHE_SIZE:
+            self._cache.popitem(last=False)
+
+    # ------------------------------------------------------------------ warm-up and saved results
+
+    def warm_up(self) -> None:
+        """Compute what the pages show before anyone changes a filter, one query at a time so that
+        visitors keep free connections, then save it for the next start. Does nothing while the
+        warehouse version is unchanged, so the background thread can call it every minute."""
+        version = self.data_version()
+        if version == self._warm_version:
+            return
+        _warming.results = {}
+        try:
+            cycles = tuple(self.filter_options()["fiscal_years"][-3:])
+            # yoy_trends and attrition_trend are asked for themselves: a cached overview() would not reach them
+            for step in (self.yoy_trends, self.attrition_trend, self.overview, self.scored_workforce,
+                         lambda: self.bottleneck_projects(limit=500),
+                         self.project_delivery, lambda: self.yoy_trends(by_department=True),
+                         lambda: self.role_trends(metric="overtime_pct"),
+                         lambda: self.top_performers(AnalyticsFilter(fiscal_years=cycles), top_n=5, min_reviews=2),
+                         self.risk_backtest):
+                step()
+            results = {name: result for name, result in _warming.results.items() if isinstance(result, pd.DataFrame)}
+        finally:
+            del _warming.results
+        self._save_results(version, results)
+        with self._cache_lock:
+            self._saved, self._saved_version = results, version
+        self._warm_version = version
+
+    def _save_results(self, version: tuple, results: dict[str, pd.DataFrame]) -> None:
+        """All or nothing. A failure here costs only speed at the next start, so it is logged."""
+        try:
+            with self.transaction() as cur:
+                cur.execute("DELETE FROM hr_dw.analytics_snapshot")
+                for name, frame in results.items():
+                    cur.execute("INSERT INTO hr_dw.analytics_snapshot "
+                                "(snapshot_key, batch_id, computed_on, code_version, payload) "
+                                "VALUES (%s, %s, %s, %s, %s)",
+                                (name, version[0], version[1], _CODE_VERSION, _to_bytes(frame)))
+        except (HRAppError, ValueError, OSError) as err:
+            logger.warning("Analytics results not saved: %s", err)
+
+    def restore_results(self) -> None:
+        """At start: bring back what an earlier run saved for this warehouse batch and this code.
+        Without saved results (or the table) the pages simply compute them, as they always could."""
+        try:
+            version = self.data_version()
+            rows = self.fetch_all("SELECT snapshot_key, computed_on, payload FROM hr_dw.analytics_snapshot "
+                                  "WHERE batch_id = %s AND code_version = %s", (version[0], _CODE_VERSION))
+            saved = {row["snapshot_key"]: _from_bytes(row["payload"]) for row in rows}
+        except (HRAppError, ValueError, OSError) as err:
+            logger.warning("Saved analytics results not restored: %s", err)
+            return
+        if not saved:
+            return
+        computed_on = rows[0]["computed_on"]
+        with self._cache_lock:
+            self._saved, self._saved_version = saved, (version[0], computed_on)
+        if computed_on == version[1]:
+            self._warm_version = version          # saved today: nothing to recompute
 
     # ------------------------------------------------------------------ filter options
 

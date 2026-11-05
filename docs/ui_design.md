@@ -43,7 +43,7 @@ src/dal/…         the Phase 3 managers — the only way the UI reaches MySQL
 | U4 | One clear chart per question, plus the exact table where it matters | charts to see the pattern, tables to read values |
 | U5 | Colours carry meaning: each department has its own colour, risk bands green → red, one sequential scale for heatmaps, a different accent per tile | replaces the first single-accent design |
 | U6 | Flat rating/KPI trends shown honestly, with a note; the surface highlights where data moves | no invented trends (synthesizer D26) |
-| U7 | Background warm-up thread computes the slow company-wide analytics at start-up | the ~20 s first computation of the risk score happens before the first visitor needs it |
+| U7 | Background warm-up thread keeps the slow default views computed, and saved across restarts (backend B24) | the first visitor after a wake-up gets them in seconds instead of waiting for minutes of queries |
 
 | U8 | **Team review: the first version's 3D views (galaxy, surfaces, podium, cube) were replaced by 2D charts** — treemap + donut, heatmaps, medal cards + leaderboard, bubble chart, timeline | 3D was hard to read precisely and to explain; every 2D chart answers one question at a glance and is a few lines of `plotly.express` |
 

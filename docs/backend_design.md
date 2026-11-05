@@ -242,12 +242,32 @@ Every manager method runs its work inside `transaction()`, so the error handling
 and cannot be forgotten. A rollback that itself fails is logged and the *original* error is
 raised (it is the one that explains what happened).
 
-**Several users at once** (decisions B18, B19):
+**Reads cost fewer round trips** (decision B23). Reading through `fetch_*` runs
+`transaction(read_only=True)`:
+
+| What happens around one query | Round trips before | Read now | Write |
+|---|---|---|---|
+| The pool checks the connection is alive | 1 | 1 | 1 |
+| The driver checks it again when opening a cursor | 1 | 1 | 1 |
+| The query | 1 | 1 | 1 |
+| Commit, which ends the snapshot | 1 | 1 | 1 |
+| Session reset on return | 4 | **0** | 4 |
+| **Total** | **8** | **4** | **8** |
+
+The reset protects the next user of the connection from a procedure's variables, temporary tables
+and settings. A SELECT leaves none of those behind, so only writes pay for it. `read_session()` goes
+further: several reads share one borrowed connection, so a page reading five things makes 12 round
+trips instead of 40.
+
+**Several users at once** (decisions B18, B19, B22):
 - **A busy pool is waited for.** When all five connections are in use, for example during
-  several long dashboard queries, a request waits up to `DB_POOL_WAIT` seconds (default 10) for
-  one to be returned. Only then does it fail, with "All 5 database connections are busy —
-  please try again in a moment". A connection the server has closed in the meantime is
-  reconnected by the pool itself.
+  several long dashboard queries, a request waits up to `DB_POOL_WAIT` seconds (default 60) for
+  one to be returned. Only then does it fail, with `PoolBusyError` ("All 5 database connections
+  are busy — please try again in a moment"). A connection the server has closed in the meantime
+  is reconnected by the pool itself.
+- **Busy is not broken.** `PoolBusyError` tells a healthy, busy database apart from one that
+  can't be reached, so the app only shows a message and leaves the shared pool alone. If the
+  pool really is reset, a page still running simply gets a new one.
 - **A taken code is retried.** Two users onboarding at the same moment both read the highest
   employee code, and the UNIQUE key refuses the second insert. `run_with_retry()` rolls that
   attempt back and runs it again, reading the new highest code (up to 3 attempts). It retries
@@ -446,6 +466,25 @@ never be cached as the new version. Cached results are handed out as copies, and
 bypassed inside a rollback session, so uncommitted data never reaches it. It holds up to 128
 results.
 
+**One visitor computes, the others wait** (decision B22). When several visitors ask for the same
+uncached result, one runs the query. The others wait for that result on a per-result lock, without
+holding a database connection.
+
+**Saved results survive a restart** (decision B24). The cache lives in memory, so it is lost when
+Streamlit Cloud puts the app to sleep, and computing everything again takes minutes. A background
+thread therefore computes each page's default view, one query at a time, and saves those results
+in `hr_dw.analytics_snapshot` as compressed Parquet. On the next start they are read back:
+
+| Saved results are from | What happens |
+|---|---|
+| This batch, this code, today | used as they are; nothing is recomputed |
+| This batch, this code, an earlier day | shown at once while the thread recomputes them (only date-based values such as tenure and days overdue can differ) |
+| Another batch, or other code | never used; computed as usual |
+| Nothing saved, or the table is missing | computed as usual: the table only saves time |
+
+The thread checks every minute, so after an ETL run or at midnight the default views are ready
+before anyone asks.
+
 ### 8.3 Notes on the data the dashboards will show
 
 - **Resolved: the step in the latest cycle.** The first version of the data had a jump in
@@ -528,6 +567,14 @@ Added after the requirements review (suggestions S1–S3 and the data fix, appro
 | B19 | Two simultaneous hires (or new projects) read the same highest code; the second got "please try again" | `run_with_retry()`: the refused attempt is rolled back and run again with the next code (up to 3 times) — only when the constraint behind the error is the code's own unique key, which `translate_error` now reads from MySQL's message |
 | B20 | `scripts/setup_database.py` was plain functions with its own MySQL connection, outside the Singleton | `SchemaManager(DatabaseConnection)` + `SqlScript`; the script is a thin command-line front end like `run_etl.py`. The splitter produces the same 112 statements as before; the data-protection guard runs before anything is executed |
 | B21 | The review-history fix (synthesizer D26) changed the overtime and survey history | factors measured again: overtime is now a stronger signal (6.4 % vs 2.0 %), and work-life balance 1 and job involvement 1 became clear, usable factors — both added (one point each). The band thresholds were kept; the top band's lift rose from 5.05 to 6.21 |
+
+Added after the live site showed errors right after waking up (Phase 5, approved):
+
+| ID | Found | Change |
+|---|---|---|
+| B22 | After a wake-up, every visitor ran the same slow queries and filled the pool. `app.py` treated the resulting "busy" as "database not reachable" and called `reset()`, which removed the pool for everyone, so other visitors' pages crashed with `AttributeError`. Some pages also had no error handling around a read | `PoolBusyError` tells busy from broken and never resets anything; a removed pool is simply created again; one visitor computes a result while the others wait without a connection; default wait 60 s; `navigation.run()` runs inside `attempt()`, so a problem no page handled is a message and not a crash screen |
+| B23 | Measured: every query cost 8 round trips, and half of them were the driver's session reset. From the live site a round trip takes about 0.25 s, so Employee 360 (5 queries) took 8–10 s on every visit | reads skip the reset, because they change no session state (writes still reset, and a test proves nothing leaks); `read_session()` lets a page's reads share one connection |
+| B24 | The analytics cache is lost whenever the free host puts the app to sleep, and computing it again takes minutes on the free database plan | the default views are saved in `hr_dw.analytics_snapshot` and read back at start. Also fixed: the warm-up asked for `bottleneck_projects(limit=25)` and other arguments the pages never use, so it warmed the wrong entries. It now asks for exactly what the pages ask for, and a test checks this |
 
 ## 12. Questions you may be asked
 
@@ -627,10 +674,41 @@ duplicate, such as an e-mail address already in use, is reported at once, becaus
 can't fix it.
 
 **Q: What if many people use the dashboard at once?**
-They share the pool of five connections. When all five are busy, a request waits up to ten
-seconds for one to be returned (B18), and repeated dashboard queries are served from the
-analytics cache in milliseconds (§8.2). A test holds every connection, releases one after half a
-second, and checks that the waiting request then succeeds.
+They share the pool of connections. When all are busy, a request waits up to 60 seconds for one to
+be returned (B18, B22), and repeated dashboard queries are served from the analytics cache in
+milliseconds (§8.2). If ten people open the same slow page at once, one query runs and the other
+nine wait for its result without using a connection. A test holds every connection, releases one
+after half a second, and checks that the waiting request then succeeds.
+
+**Q: The live site once showed errors right after waking up. What was wrong?**
+Two problems met (B22). Waking up empties the in-memory cache, so the slow queries all ran at once
+and used up the three connections of the free plan. That was only a wait, but a "busy" answer at
+the app's health check was treated as "database not reachable", and that code resets the shared
+pool, which crashed everyone else's page. Now busy and broken are different exceptions, resetting
+can't hurt a running page, and duplicate queries no longer run. We reproduced the crash locally
+before fixing it, and there are regression tests for each part.
+
+**Q: How did you make the site faster?**
+We measured first. The slowness was network round trips, not page code: 8 per query at about
+0.25 s each from the live site (B23). Reads no longer do the session reset, and Employee 360 reads
+everything on one connection (12 round trips instead of 40). For the wake-up, the slow results are
+saved in the database and read back in seconds (B24).
+
+**Q: Doesn't saving results break "the dashboards are always current"?**
+No. A saved result is only used for the same warehouse batch and the same code. After an ETL run
+or an employee change the batch number changes, so old results can't be shown. The one exception is
+deliberate: results from an earlier day are shown for the moments it takes to recompute them, and
+only date-based values such as tenure or days overdue can differ.
+
+**Q: Why Parquet in a table and not pickle or a file?**
+The free host's disk is lost when the app sleeps, so the database is the only place that survives.
+Parquet is small, keeps the column types, and reading it can't run code, unlike pickle, so someone
+who could change that table could not take over the app.
+
+**Q: Why not skip the reset for writes too?**
+A stored procedure can leave variables, temporary tables or `FOREIGN_KEY_CHECKS = 0` behind if it
+fails halfway. The next user of that connection must not inherit them, so writes keep the reset. A
+SELECT can't leave any of that behind.
 
 **Q: Why is the database setup a class too?**
 So that no part of the application connects to MySQL outside the `DatabaseConnection` Singleton,

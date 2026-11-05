@@ -18,6 +18,7 @@ DROP TABLE IF EXISTS dim_department;
 DROP TABLE IF EXISTS dim_date;
 DROP TABLE IF EXISTS etl_rejected_rows;
 DROP TABLE IF EXISTS etl_batch_log;
+DROP TABLE IF EXISTS analytics_snapshot;
 SET FOREIGN_KEY_CHECKS = 1;
 
 
@@ -211,3 +212,19 @@ CREATE TABLE etl_rejected_rows (
     CONSTRAINT pk_etl_rejected_rows PRIMARY KEY (reject_id),
     INDEX ix_etl_rejected_rows_batch (batch_id)
 ) ENGINE = InnoDB COMMENT = 'Source rows the ETL could not load, with the reason';
+
+
+-- -----------------------------------------------------------------------------
+-- Application support (not part of the star): saved dashboard results
+-- Rewritten by the app's background warm-up; safe to empty at any time (the dashboards then
+-- compute their results again). See docs/backend_design.md, decision B24.
+-- -----------------------------------------------------------------------------
+
+CREATE TABLE analytics_snapshot (
+    snapshot_key  VARCHAR(255) NOT NULL,                   -- which dashboard query, with its arguments
+    batch_id      INT          NOT NULL,                   -- the warehouse version the result belongs to
+    computed_on   DATE         NOT NULL,
+    code_version  CHAR(64)     NOT NULL,                   -- SHA-256 of the code that computed it
+    payload       LONGBLOB     NOT NULL,                   -- the result as compressed Parquet
+    CONSTRAINT pk_analytics_snapshot PRIMARY KEY (snapshot_key)
+) ENGINE = InnoDB COMMENT = 'Slow dashboard results kept across app restarts';

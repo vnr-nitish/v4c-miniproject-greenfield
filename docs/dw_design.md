@@ -427,6 +427,12 @@ back-test, measured performance: [`backend_design.md`](backend_design.md) §8.
 | `etl_batch_log` | log_id PK, batch_id, step_name, rows_affected, status, message, started_at, finished_at |
 | `etl_rejected_rows` | reject_id PK, batch_id, source_table, source_key, reason, rejected_at |
 
+**Application support table** (not part of the star, safe to empty at any time):
+
+| Table | Columns |
+|---|---|
+| `analytics_snapshot` | snapshot_key PK, batch_id, computed_on, code_version, payload: slow dashboard results kept across app restarts (`docs/backend_design.md`, B24) |
+
 ---
 
 ## 12. Physical design
