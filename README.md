@@ -24,7 +24,7 @@ Python 3.11 (OOP, pandas, Faker) · MySQL 8 · Streamlit · Plotly · draw.io ·
 ├── sql/                  # DDL, DML, stored procedures, CTEs, window functions, validation queries
 ├── scripts/              # command-line front ends: setup_database.py (SchemaManager), run_etl.py (EtlManager)
 ├── analysis/             # dataset profiling that drove the schema design
-├── diagrams/             # Editable draw.io ER and dimensional-model diagrams
+├── diagrams/             # Editable ER and dimensional-model diagrams (draw.io and Mermaid)
 ├── data/raw/             # IBM HR Analytics source dataset
 ├── tests/                # pytest tests (schema, synthesizer, ETL, entities, managers)
 └── docs/                 # Design documents and project journal

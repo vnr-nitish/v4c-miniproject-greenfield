@@ -1,0 +1,154 @@
+%% OLTP schema (hr_oltp)
+%% Generated from sql/01_oltp_ddl.sql.
+erDiagram
+    departments {
+        TINYINT department_id PK
+        VARCHAR department_code UK
+        VARCHAR department_name UK
+    }
+    job_levels {
+        TINYINT job_level_id PK
+        VARCHAR level_title UK
+        DECIMAL salary_band_min
+        DECIMAL salary_band_max
+    }
+    job_roles {
+        TINYINT job_role_id PK
+        VARCHAR role_name UK
+        TINYINT min_job_level_id FK
+        TINYINT max_job_level_id FK
+    }
+    department_job_roles {
+        TINYINT department_id PK, FK
+        TINYINT job_role_id PK, FK
+    }
+    education_levels {
+        TINYINT education_level_id PK
+        VARCHAR level_name UK
+    }
+    education_fields {
+        TINYINT education_field_id PK
+        VARCHAR field_name UK
+    }
+    performance_rating_levels {
+        TINYINT rating_id PK
+        VARCHAR rating_label UK
+        DECIMAL hike_min_pct
+        DECIMAL hike_max_pct
+    }
+    exit_reasons {
+        TINYINT exit_reason_id PK
+        VARCHAR reason_name UK
+        BOOLEAN is_voluntary
+    }
+    employees {
+        INT employee_id PK
+        CHAR employee_code UK
+        VARCHAR first_name
+        VARCHAR last_name
+        VARCHAR email UK
+        VARCHAR phone
+        VARCHAR gender
+        DATE date_of_birth
+        VARCHAR marital_status
+        TINYINT education_level_id FK
+        TINYINT education_field_id FK
+        TINYINT distance_from_home_km
+        TINYINT prior_experience_years
+        TINYINT prior_companies_count
+        DATE hire_date
+        DATE exit_date
+        TINYINT exit_reason_id FK
+        BOOLEAN is_active
+        DATETIME created_at
+        DATETIME updated_at
+    }
+    employee_job_history {
+        INT history_id PK
+        INT employee_id FK
+        TINYINT department_id FK
+        TINYINT job_role_id FK
+        TINYINT job_level_id FK
+        INT manager_id FK
+        DECIMAL monthly_income
+        TINYINT stock_option_level
+        VARCHAR business_travel
+        VARCHAR change_reason
+        DATE effective_start_date
+        DATE effective_end_date
+        INT current_version_key UK
+        DATETIME created_at
+    }
+    employee_surveys {
+        INT survey_id PK
+        INT employee_id FK
+        DATE survey_date
+        SMALLINT survey_year
+        TINYINT environment_satisfaction
+        TINYINT job_satisfaction
+        TINYINT relationship_satisfaction
+        TINYINT job_involvement
+        TINYINT work_life_balance
+        DATETIME created_at
+    }
+    projects {
+        SMALLINT project_id PK
+        CHAR project_code UK
+        VARCHAR project_name
+        VARCHAR description
+        TINYINT department_id FK
+        INT project_manager_id FK
+        DATE start_date
+        DATE planned_end_date
+        DATE actual_end_date
+        DECIMAL budget
+        VARCHAR status
+        VARCHAR priority
+        DATETIME created_at
+        DATETIME updated_at
+    }
+    project_assignments {
+        INT assignment_id PK
+        INT employee_id FK
+        SMALLINT project_id FK
+        VARCHAR project_role
+        TINYINT allocation_pct
+        DATE start_date
+        DATE end_date
+        DATETIME created_at
+    }
+    performance_reviews {
+        INT review_id PK
+        INT employee_id FK
+        SMALLINT review_year
+        DATE review_date
+        INT reviewer_id FK
+        SMALLINT project_id FK
+        TINYINT rating_id FK
+        DECIMAL kpi_score
+        TINYINT training_sessions
+        BOOLEAN overtime_flag
+        VARCHAR comments
+        DATETIME created_at
+    }
+
+    job_levels ||--o{ job_roles : "min_job_level_id"
+    job_levels ||--o{ job_roles : "max_job_level_id"
+    departments ||--o{ department_job_roles : "department_id"
+    job_roles ||--o{ department_job_roles : "job_role_id"
+    education_levels ||--o{ employees : "education_level_id"
+    education_fields ||--o{ employees : "education_field_id"
+    exit_reasons |o--o{ employees : "exit_reason_id"
+    employees ||--o{ employee_job_history : "employee_id"
+    department_job_roles ||--o{ employee_job_history : "department_id, job_role_id"
+    job_levels ||--o{ employee_job_history : "job_level_id"
+    employees |o--o{ employee_job_history : "manager_id"
+    employees ||--o{ employee_surveys : "employee_id"
+    departments ||--o{ projects : "department_id"
+    employees |o--o{ projects : "project_manager_id"
+    employees ||--o{ project_assignments : "employee_id"
+    projects ||--o{ project_assignments : "project_id"
+    employees ||--o{ performance_reviews : "employee_id"
+    employees ||--o{ performance_reviews : "reviewer_id"
+    projects |o--o{ performance_reviews : "project_id"
+    performance_rating_levels ||--o{ performance_reviews : "rating_id"
