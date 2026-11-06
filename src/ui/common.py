@@ -1,4 +1,4 @@
-"""Shared page helpers: header, KPI tiles, filters, error display and the editor passcode."""
+"""Shared page helpers: header, KPI tiles, fact cards, filters, pop-ups, error display and the editor passcode."""
 from __future__ import annotations
 
 import hmac
