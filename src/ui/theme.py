@@ -23,12 +23,12 @@ CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
 html, body, [class*="css"], .stMarkdown { font-family: 'Plus Jakarta Sans', sans-serif; }
 .stApp { background: #0B1220; }
-.block-container { padding-top: 2rem; max-width: 1400px; }
+.block-container, [data-testid="stMainBlockContainer"] { padding-top: 2rem; padding-bottom: 1.5rem; max-width: 1400px; }
 .hero { padding: 1.6rem 1.8rem; border-radius: 20px; margin-bottom: 1.2rem; position: relative; overflow: hidden;
         background: linear-gradient(115deg, #312E81 0%, #0F766E 55%, #B45309 120%); }
 .hero h1 { margin: 0; font-size: 2rem; font-weight: 800; color: #fff; }
 .hero p { margin: .35rem 0 0; color: rgba(255,255,255,.82); font-size: 1rem; }
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); gap: .9rem; margin: .2rem 0 1.2rem; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: .9rem; margin: .2rem 0 1.2rem; }
 .tile { padding: 1rem 1.1rem; border-radius: 16px; background: #111A2E; border: 1px solid rgba(148,163,184,.14);
         border-top: 4px solid var(--c); transition: transform .2s ease, box-shadow .2s ease; }
 .tile:hover { transform: translateY(-3px); box-shadow: 0 12px 28px rgba(0,0,0,.35); }
@@ -43,8 +43,12 @@ html, body, [class*="css"], .stMarkdown { font-family: 'Plus Jakarta Sans', sans
          border-left: 5px solid var(--c); }
 .medal h4 { margin: 0 0 .5rem; color: var(--c); }
 .medal div { margin: .25rem 0; color: #E5E7EB; } .medal small { color: #94A3B8; }
-.scd-old { border: 1px solid #EF4444; border-radius: 12px; padding: .6rem 1rem; background: rgba(239,68,68,.08); }
-.scd-new { border: 1px solid #22C55E; border-radius: 12px; padding: .6rem 1rem; background: rgba(34,197,94,.08); }
+.fact-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(480px, 100%), 1fr)); gap: .9rem; margin: .4rem 0 1rem; }
+.fact-card { padding: 1rem 1.2rem; border-radius: 16px; background: #111A2E; border: 1px solid rgba(148,163,184,.14); }
+.fact-card h4 { margin: 0 0 .6rem; padding: 0; font-size: 1rem; font-weight: 600; color: #14B8A6; }
+.fact-card dl { display: grid; grid-template-columns: minmax(120px, 38%) 1fr; gap: .4rem .8rem; margin: 0; }
+.fact-card dt { color: #94A3B8; font-size: .85rem; font-weight: 400; }
+.fact-card dd { margin: 0; color: #E5E7EB; font-size: .9rem; overflow-wrap: anywhere; }
 div[data-testid="stForm"] { border-radius: 16px; border-color: rgba(148,163,184,.2); background: #0F172A; }
 div[data-testid="stMetric"] { background: #111A2E; border-radius: 14px; padding: .6rem .9rem;
                               border: 1px solid rgba(148,163,184,.14); }

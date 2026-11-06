@@ -696,3 +696,17 @@ now read first (`ReferenceDataManager.preload()`, `position_picker`), and the li
 background at start. Stock option level is a small 0–3 selector instead of a full-width slider. The balloons
 are gone: a successful onboarding opens a pop-up with the employee code and the warehouse row, and OK
 leaves an empty form. Bad input keeps what was typed.
+
+## Step 29 — Employee 360 rebuilt, from the user's review of the live site
+
+One search box finds anyone by name, e-mail, phone number or employee ID (`EmployeeManager.search`, which
+now also covers leavers on request and matches on `hr_oltp.employees` alone, about 0.5–0.9 s on the cloud
+from the laptop). Five tabs: Details, Career timeline (a table, the chart was removed), Update (position
+or personal details), Reviews & projects, and Exit. Every save ends in the same pop-up (`announce`).
+
+**Bug found while checking:** the position form started the manager and business travel on fixed defaults,
+so changing anything else silently changed them too. They now start on the employee's current values.
+
+The generated data has about 5,000 different phone numbers for 100,000 people, so a phone search usually
+lists about 20 people. Also: the Command centre's charts now form two aligned rows, and the empty space
+at the bottom of every page is gone.

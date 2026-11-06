@@ -387,6 +387,29 @@ def test_onboarding_creates_the_employee_and_the_first_warehouse_version(session
     assert hired.employee_id in EmployeeManager().search("Asha Verma", department_id=RND, limit=1000).employee_id.tolist()
 
 
+def test_search_finds_anyone_by_name_email_phone_or_id(session, picks):
+    email = f"{uuid4().hex[:12]}_x@example.com"
+    hired = hire(picks, first_name="Zzyzx", last_name="Quorra", email=email, phone="+91 (99887) 76-655")
+    search = lambda text: EmployeeManager().search(text, active_only=False, limit=50)    # noqa: E731
+    number = int(hired.employee_code[3:])
+    for text in (hired.employee_code, hired.employee_code.lower(), f"EMP{number}", str(hired.employee_id),
+                 email, email.upper(), email[:8], "Zzyzx", "zzyzx quorra", "  zzyzx   quorra ", "Quorra",
+                 "+91 (99887) 76-655", "919988776655", "9988776655", "98877"):
+        assert hired.employee_id in search(text).employee_id.tolist(), text
+    for text in (hired.employee_code, str(hired.employee_id), email, "919988776655"):      # exact: comes first
+        assert search(text).iloc[0][["employee_id", "match_rank"]].tolist() == [hired.employee_id, 0], text
+    assert search("Zzyzx").match_rank.iloc[0] == 1                                         # the start of a name
+    assert search("Quorra").match_rank.iloc[0] == 2                                        # somewhere in it
+    assert search("%").empty and search("Zzy_x").empty                                     # no wildcards from users
+    assert search("no such person").empty
+
+
+def test_search_leaves_out_leavers_unless_asked(picks):
+    code = value("SELECT employee_code AS code FROM hr_oltp.employees WHERE exit_date IS NOT NULL LIMIT 1")
+    assert EmployeeManager().search(code).empty
+    assert EmployeeManager().search(code, active_only=False).employee_code.tolist() == [code]
+
+
 @pytest.mark.parametrize("position_changes, employee_changes, error, message", [
     (dict(department_id=SALES), {}, BusinessRuleError, "does not exist in the selected department"),
     (dict(job_level_id=5), {}, BusinessRuleError, "outside the allowed range"),

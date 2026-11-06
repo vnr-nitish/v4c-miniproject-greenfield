@@ -8,6 +8,7 @@ import streamlit as st
 
 from src.dal import ReferenceDataManager
 from src.models import Position
+from src.models.employee import BUSINESS_TRAVEL
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -60,11 +61,18 @@ def position_picker(key: str, current: Position | None = None) -> dict:
                        key=f"{key}_pay_{job_level_id}")
     manager_ids = [None] + candidates.employee_id.tolist()
     names = dict(zip(candidates.employee_id, candidates.full_name + " · L" + candidates.job_level.astype(str)))
+    # A change must start from what is true today: nothing may change just because a field was not touched
+    if current and current.department_id == department_id:
+        if current.manager_id is not None and current.manager_id not in names:
+            manager_ids.insert(1, current.manager_id)
+            names[current.manager_id] = f"Current manager · ID {current.manager_id}"
+        first_manager = manager_ids.index(current.manager_id)
+    else:
+        first_manager = 1 if len(manager_ids) > 1 else 0
     manager_id = c5.selectbox("Manager", manager_ids, key=f"{key}_mgr_{department_id}_{job_level_id}",
-                              format_func=lambda m: "— none —" if m is None else names[m],
-                              index=1 if len(manager_ids) > 1 else 0)
-    travel = c6.selectbox("Business travel", ["Non-Travel", "Travel_Rarely", "Travel_Frequently"], index=1,
-                          key=f"{key}_travel")
+                              format_func=lambda m: "— none —" if m is None else names[m], index=first_manager)
+    travel = c6.selectbox("Business travel", BUSINESS_TRAVEL, key=f"{key}_travel",
+                          index=BUSINESS_TRAVEL.index(current.business_travel) if current else 1)
     stock = c7.segmented_control("Stock option level", [0, 1, 2, 3], required=True, key=f"{key}_stock",
                                  default=current.stock_option_level if current else 0)
     return dict(department_id=int(department_id), job_role_id=int(job_role_id), job_level_id=int(job_level_id),

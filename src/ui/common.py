@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hmac
 import os
+from html import escape
 from typing import Any, Callable
 
 import streamlit as st
@@ -37,6 +38,42 @@ def tiles(items: list[tuple[str, str, float | None, bool]]) -> None:
         html.append(f"<div class='tile' style='--c:{color}'><div class='label'>{label}</div>"
                     f"<div class='value'>{value}</div>{delta}</div>")
     st.markdown(f"<div class='tiles'>{''.join(html)}</div>", unsafe_allow_html=True)
+
+
+def fact_cards(cards: dict[str, list[tuple[str, Any]]]) -> None:
+    """Groups of label and value, such as an employee's details. Values can come from what users
+    typed, so they are escaped; an empty value shows as a dash."""
+    html = []
+    for title, facts in cards.items():
+        rows = "".join(f"<dt>{escape(label)}</dt><dd>{escape('—' if value in (None, '') else str(value))}</dd>"
+                       for label, value in facts)
+        html.append(f"<div class='fact-card'><h4>{escape(title)}</h4><dl>{rows}</dl></div>")
+    st.markdown(f"<div class='fact-cards'>{''.join(html)}</div>", unsafe_allow_html=True)
+
+
+def announce(title: str, message: str, tables: dict[str, Any] | None = None, caption: str | None = None) -> None:
+    """A change was saved: redraw the page with the new data and show this in a pop-up on top."""
+    st.session_state["announcement"] = (title, message, tables or {}, caption)
+    st.rerun()
+
+
+def show_announcement() -> None:
+    """The pop-up announce() asked for, if any. Only its OK button closes it."""
+    if "announcement" not in st.session_state:
+        return
+    title, message, tables, caption = st.session_state.pop("announcement")
+
+    @st.dialog(title, width="large", dismissible=False)
+    def popup() -> None:
+        st.success(message)
+        for heading, table in tables.items():
+            st.markdown(heading)
+            st.dataframe(table, hide_index=True, width="stretch")
+        if caption:
+            st.caption(caption)
+        if st.button("OK", type="primary", key="announcement_ok"):
+            st.rerun()
+    popup()
 
 
 def data_changed() -> None:

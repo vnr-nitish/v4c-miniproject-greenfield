@@ -3,7 +3,6 @@ departments always have the same colour, risk bands go from green to red."""
 from __future__ import annotations
 
 import textwrap
-from datetime import date
 
 import pandas as pd
 import plotly.express as px
@@ -34,7 +33,7 @@ def headcount_treemap(workforce: pd.DataFrame) -> go.Figure:
 def donut(frame: pd.DataFrame, names: str, values: str, colors: dict, title: str) -> go.Figure:
     fig = px.pie(frame, names=names, values=values, hole=.62, color=names, color_discrete_map=colors)
     fig.update_traces(textinfo="percent", sort=False)
-    return _finish(fig, 340, title)
+    return _finish(fig, 430, title)                 # as tall as the treemap beside it
 
 
 def heatmap(grid: pd.DataFrame, title: str, scale=None, fmt: str = ".1f") -> go.Figure:
@@ -94,17 +93,3 @@ def bubbles(projects: pd.DataFrame) -> go.Figure:
                      labels={"days_overdue": "Days overdue", "team_overtime_pct": "Team overtime %"})
     fig.update_traces(marker=dict(line=dict(width=1, color="rgba(255,255,255,.6)"), opacity=.85))
     return _finish(fig, 440, "Overdue projects · bubble size = budget")
-
-
-def career_timeline(history: pd.DataFrame) -> go.Figure:
-    """An employee's SCD Type 2 versions as bars on a timeline, coloured by department."""
-    data = history.assign(end=history.end_date.map(lambda d: min(d, date.today())),
-                          label="v" + history.version_number.astype(str) + " · " + history.job_role
-                          + " (L" + history.job_level.astype(str) + ")")
-    fig = px.timeline(data, x_start="start_date", x_end="end", y="label", color="department_name",
-                      color_discrete_map=theme.DEPARTMENT_COLORS,
-                      hover_data={"change_reason": True, "monthly_income": ":,.0f", "is_current": True, "end": False})
-    fig.update_yaxes(autorange="reversed", title=None)
-    fig.update_traces(marker=dict(cornerradius=6))
-    fig.update_layout(legend_title_text="Department")
-    return _finish(fig, 120 + 48 * len(data), "Career timeline · one bar per SCD Type 2 version")

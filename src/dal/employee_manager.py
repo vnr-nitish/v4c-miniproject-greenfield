@@ -6,6 +6,7 @@ key is ON DELETE RESTRICT. Leaving is recorded with record_exit() instead.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import date
 
@@ -26,6 +27,11 @@ _HISTORY_SQL = ("SELECT employee_sk, version_number, department_name, job_role, 
                 "manager_name, monthly_income, salary_band, business_travel, change_reason, "
                 "start_date, end_date, is_current "
                 "FROM hr_dw.dim_employee WHERE employee_id = %s ORDER BY version_number")
+
+_FULL_NAME = "CONCAT(e.first_name, ' ', e.last_name)"
+_PHONE_DIGITS = "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(e.phone, ' ', ''), '-', ''), '+', ''), '(', ''), ')', '')"
+_NUMBER_OR_CODE = re.compile(r"(EMP)?\d+", re.IGNORECASE)
+_PHONE_INPUT = re.compile(r"[\d +()-]+")
 
 
 @dataclass(frozen=True)
@@ -111,18 +117,43 @@ class EmployeeManager(DatabaseConnection):
 
     def search(self, text: str | None = None, department_id: int | None = None,
                active_only: bool = True, limit: int = 100) -> pd.DataFrame:
-        """Find employees by code or part of the name, optionally within a department."""
-        text = (text or "").strip()
+        """Find employees by name, e-mail, phone number, employee code or id; any part of a name,
+        an e-mail or a phone number will do. Exact matches come first (match_rank 0).
+
+        The matching runs on hr_oltp.employees alone and only the people found are joined to their
+        job, because going through the 100K-row view for every search takes seconds on the cloud.
+        """
+        text = " ".join((text or "").split())
+        digits = re.sub(r"\D", "", text)
+        escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")     # typed literally
+        params = {"text": text, "code": text.upper(), "contains": f"%{escaped}%", "starts": f"{escaped}%",
+                  "department": department_id, "active_only": active_only, "limit": limit}
+        exact = ["e.employee_code = %(code)s", "e.email = %(text)s"]
+        partial = [f"{_FULL_NAME} LIKE %(contains)s", "e.email LIKE %(contains)s"]
+        if digits and _NUMBER_OR_CODE.fullmatch(text):                                   # 220, EMP220, EMP000220
+            params.update(employee_id=int(digits), code=f"EMP{int(digits):06d}")
+            exact.append("e.employee_id = %(employee_id)s")
+        if len(digits) >= 4 and _PHONE_INPUT.fullmatch(text):
+            params.update(digits=digits, digits_within=f"%{digits}%")
+            exact.append(f"{_PHONE_DIGITS} = %(digits)s")
+            partial.append(f"{_PHONE_DIGITS} LIKE %(digits_within)s")
         return self.fetch_frame(
-            "SELECT employee_id, employee_code, full_name, department_name, job_role, job_level, manager_name, "
-            "       monthly_income, hire_date, exit_date, is_active "
-            "FROM hr_oltp.vw_employee_current "
-            "WHERE (%(text)s = '' OR employee_code = UPPER(%(text)s) "
-            "       OR CONCAT(first_name, ' ', last_name) LIKE CONCAT('%%', %(text)s, '%%')) "
-            "  AND (%(department)s IS NULL OR department_id = %(department)s) "
-            "  AND (NOT %(active_only)s OR is_active) "
-            "ORDER BY employee_code LIMIT %(limit)s",
-            {"text": text, "department": department_id, "active_only": active_only, "limit": limit})
+            f"""SELECT v.employee_id, v.employee_code, v.full_name, v.email, v.phone, v.department_name, v.job_role,
+                       v.job_level, v.manager_name, v.monthly_income, v.hire_date, v.exit_date, v.is_active, m.match_rank
+                FROM (SELECT e.employee_id,
+                             CASE WHEN {' OR '.join(exact)} THEN 0
+                                  WHEN {_FULL_NAME} LIKE %(starts)s THEN 1 ELSE 2 END AS match_rank
+                      FROM hr_oltp.employees e
+                      WHERE (%(text)s = '' OR {' OR '.join(exact + partial)})
+                        AND (NOT %(active_only)s OR e.is_active)
+                        AND (%(department)s IS NULL OR EXISTS (
+                                SELECT 1 FROM hr_oltp.employee_job_history h
+                                WHERE h.employee_id = e.employee_id AND h.effective_end_date IS NULL
+                                  AND h.department_id = %(department)s))
+                      ORDER BY match_rank, e.employee_code
+                      LIMIT %(limit)s) m
+                JOIN hr_oltp.vw_employee_current v ON v.employee_id = m.employee_id
+                ORDER BY m.match_rank, v.employee_code""", params)
 
     def example_codes(self, limit: int = 8) -> list[str]:
         """Active employees with the longest SCD Type 2 history — good examples for the 360 view."""

@@ -3,14 +3,18 @@
 Read-only: no test presses a button that writes. The analytics cache is shared with the test
 process, so the slow warehouse queries run once.
 """
+from datetime import date
+
 import pandas as pd
 import pytest
 from streamlit.testing.v1 import AppTest
 
 from src.dal import AnalyticsManager, EmployeeManager, ReferenceDataManager
+from src.dal.employee_manager import PositionChange
 from src.db_manager import DatabaseConnection
 from src.exceptions import DatabaseError, HRAppError, PoolBusyError
 from src.ui import charts
+from src.ui.common import fact_cards
 
 PAGES = ["overview", "trends", "top_performers", "attrition", "bottlenecks", "operations",
          "onboard", "employee_360", "projects", "reviews"]
@@ -90,7 +94,9 @@ def test_a_problem_no_page_handled_is_a_message_not_a_crash(error, shown, monkey
 def test_data_entry_pages_are_locked_by_the_passcode(page, monkeypatch):
     """With APP_PASSCODE set (the public site), every data-entry page renders its unlock form(s)."""
     monkeypatch.setenv("APP_PASSCODE", "test-passcode")
-    at = AppTest.from_file(f"../views/{page}.py", default_timeout=180).run()
+    at = AppTest.from_file(f"../views/{page}.py", default_timeout=180)
+    at.session_state["e360_search"] = long_career().employee_code          # Employee 360 asks after a search
+    at.run()
     assert not at.exception, at.exception
     assert any("protected" in i.value for i in at.info)
 
@@ -136,7 +142,7 @@ def test_onboarding_shows_a_pop_up_and_then_an_empty_form(monkeypatch):
     assert any(existing.employee_code in s.value for s in at.success)      # the pop-up
     assert not hasattr(at, "balloons") or not at.balloons
     assert [field.value for field in at.text_input] == ["", "", "", ""]    # the form behind it is already empty
-    at.button(key="onboard_ok").click().run()
+    at.button(key="announcement_ok").click().run()
     assert not at.exception, at.exception
     assert not at.success                                                  # OK closed the pop-up
     assert [field.value for field in at.text_input] == ["", "", "", ""]
@@ -172,3 +178,151 @@ def test_invalid_onboarding_keeps_what_was_typed(monkeypatch):
     assert not saved and not at.success
     assert any("e-mail" in w.value for w in at.warning)
     assert next(field for field in at.text_input if field.label == "First name").value == "Asha"
+
+
+# ----------------------------------------------------------------------------- Employee 360
+
+TABS = ["Details", "Career timeline", "Update", "Reviews & projects", "Exit"]
+
+
+def long_career():
+    manager = EmployeeManager()
+    return manager.get_by_code(manager.example_codes(1)[0])
+
+
+def employee_page(monkeypatch, query: str) -> AppTest:
+    monkeypatch.delenv("APP_PASSCODE", raising=False)
+    at = AppTest.from_file("../views/employee_360.py", default_timeout=180)
+    at.session_state["e360_search"] = query
+    at.run()
+    assert not at.exception, at.exception
+    return at
+
+
+def press(at: AppTest, label: str) -> None:
+    next(button for button in at.button if button.label == label).click().run()
+    assert not at.exception, at.exception
+
+
+def test_employee_360_starts_with_only_the_search(monkeypatch):
+    at = employee_page(monkeypatch, "")
+    assert not at.tabs and at.text_input(key="e360_search").value == ""
+
+
+@pytest.mark.parametrize("field", ["employee_code", "email", "employee_id"])
+def test_employee_360_opens_on_an_exact_search(field, monkeypatch):
+    employee = long_career()
+    at = employee_page(monkeypatch, str(getattr(employee, field)))
+    assert [tab.label for tab in at.tabs] == TABS
+    assert any(employee.employee_code in m.value for m in at.markdown)
+    assert not at.metric and not at.get("plotly_chart")                    # no boxes, and the timeline is a table
+    details = " ".join(m.value for m in at.tabs[0].markdown)
+    assert employee.email in details and employee.phone in details
+    assert len(at.tabs[1].dataframe) == 1
+    assert len(at.tabs[3].dataframe) == 2                                  # reviews and projects
+
+
+def test_employee_360_lists_several_matches_before_opening_one(monkeypatch):
+    at = employee_page(monkeypatch, "an")
+    assert not at.tabs and len(at.dataframe) == 1
+    assert any("matches" in c.value for c in at.caption)
+
+
+def test_employee_360_lists_everyone_who_shares_a_phone_number(monkeypatch):
+    """The generated data has about 5,000 different numbers for 100,000 people."""
+    at = employee_page(monkeypatch, long_career().phone)
+    assert not at.tabs and len(at.dataframe) == 1
+
+
+def test_employee_360_says_when_nobody_matches(monkeypatch):
+    at = employee_page(monkeypatch, "no such person")
+    assert not at.tabs and any("No employee matches" in i.value for i in at.info)
+
+
+def test_employee_360_updates_personal_details_in_a_pop_up(monkeypatch):
+    employee = long_career()
+    saved = []
+    monkeypatch.setattr(EmployeeManager, "update_details", lambda self, e: saved.append(e) or e)    # nothing is written
+    at = employee_page(monkeypatch, employee.employee_code)
+    at.button_group(key=f"e360_update_{employee.employee_id}").set_value("Personal details").run()
+    assert not at.exception, at.exception
+    next(field for field in at.text_input if field.label == "Last name").input("Changed")
+    press(at, "Save details")
+    assert saved and saved[0].last_name == "Changed" and saved[0].email == employee.email
+    assert saved[0].hire_date == employee.hire_date                        # has its own rules: not on this form
+    assert any("were saved" in s.value for s in at.success)
+    at.button(key="announcement_ok").click().run()
+    assert not at.exception, at.exception and not at.success
+
+
+def test_employee_360_refuses_invalid_personal_details(monkeypatch):
+    employee = long_career()
+    saved = []
+    monkeypatch.setattr(EmployeeManager, "update_details", lambda self, e: saved.append(e) or e)
+    at = employee_page(monkeypatch, employee.employee_code)
+    at.button_group(key=f"e360_update_{employee.employee_id}").set_value("Personal details").run()
+    next(field for field in at.text_input if field.label == "E-mail").input("not an address")
+    press(at, "Save details")
+    assert not saved and any("e-mail" in w.value for w in at.warning)
+
+
+def test_employee_360_changes_position_in_a_pop_up(monkeypatch):
+    employee = long_career()
+    history = EmployeeManager().history(employee.employee_id)
+    outcome = PositionChange(employee.employee_id, 1, "Transfer", date.today(), 999, history)
+    monkeypatch.setattr(EmployeeManager, "change_position", lambda self, *args: outcome)            # nothing is written
+    at = employee_page(monkeypatch, employee.employee_code)
+    press(at, "Apply change")
+    assert any("Transfer recorded" in s.value for s in at.success)
+
+
+@pytest.mark.parametrize("condition", ["h.manager_id IS NOT NULL AND h.business_travel = 'Travel_Frequently'",
+                                       "h.manager_id IS NULL AND h.business_travel = 'Non-Travel'"])
+def test_a_position_change_starts_from_what_is_true_today(condition, monkeypatch):
+    """The manager and travel used to start on fixed defaults, so changing anything else changed them too."""
+    code = DatabaseConnection().fetch_one(
+        "SELECT e.employee_code FROM hr_oltp.employees e JOIN hr_oltp.employee_job_history h "
+        f"ON h.employee_id = e.employee_id AND h.effective_end_date IS NULL WHERE e.is_active AND {condition} LIMIT 1"
+    )["employee_code"]
+    manager = EmployeeManager()
+    current = manager.current_position(manager.get_by_code(code).employee_id)
+    sent = []
+
+    def record(self, employee_id, position, *args):
+        sent.append(position)
+        return PositionChange(employee_id, 1, "Transfer", date.today(), 999, self.history(employee_id))
+
+    monkeypatch.setattr(EmployeeManager, "change_position", record)                                 # nothing is written
+    at = employee_page(monkeypatch, code)
+    press(at, "Apply change")
+    assert sent and sent[0].manager_id == current.manager_id
+    assert sent[0].business_travel == current.business_travel
+    assert (sent[0].department_id, sent[0].job_role_id, sent[0].job_level_id) == (
+        current.department_id, current.job_role_id, current.job_level_id)
+    assert sent[0].stock_option_level == current.stock_option_level
+
+
+def test_employee_360_records_an_exit_in_a_pop_up(monkeypatch):
+    employee = long_career()
+    monkeypatch.setattr(EmployeeManager, "record_exit", lambda self, *args: 2)                      # nothing is written
+    at = employee_page(monkeypatch, employee.employee_code)
+    press(at, "Record exit")
+    assert any("2 assignment(s) closed" in s.value for s in at.success)
+
+
+def test_employee_360_keeps_a_leaver_read_only(monkeypatch):
+    code = DatabaseConnection().fetch_one("SELECT employee_code FROM hr_oltp.employees "
+                                          "WHERE exit_date IS NOT NULL LIMIT 1")["employee_code"]
+    at = employee_page(monkeypatch, code)
+    assert [tab.label for tab in at.tabs] == TABS
+    assert any("can no longer change" in i.value for i in at.tabs[2].info)
+    assert any("left on" in i.value for i in at.tabs[4].info)
+    assert not [button for button in at.button if button.label in ("Apply change", "Record exit")]
+
+
+def test_fact_cards_escape_what_users_typed(monkeypatch):
+    shown = []
+    monkeypatch.setattr("src.ui.common.st.markdown", lambda html, **kwargs: shown.append(html))
+    fact_cards({"Card": [("Name", "<script>x</script>"), ("Empty", None), ("Zero", 0)]})
+    assert "&lt;script&gt;" in shown[0] and "<script>" not in shown[0]
+    assert "<dd>—</dd>" in shown[0] and "<dd>0</dd>" in shown[0]
