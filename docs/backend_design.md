@@ -628,7 +628,7 @@ nothing survives the session, and after the full suite every table count equals 
 **Q: Is the attrition risk a machine-learning model?**
 No. It's a points score from eleven work-related factors, each measured on the warehouse (§8.1).
 It's explainable (every employee's list shows the factors behind their score) and back-tested:
-the Very high band lost 19.6 % within a year, against 0.7 % for Low. A model could be more
+the Very high band lost 19.5 % within a year, against 0.7 % for Low. A model could be more
 precise, but it would be a black box and an extra dependency beyond the brief.
 
 **Q: Why isn't marital status in the score, if it predicts attrition?**

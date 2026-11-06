@@ -323,7 +323,7 @@ at once and reach the dashboards after the next ETL run.
 | You do | OLTP | Warehouse / dashboards |
 |---|---|---|
 | Onboard an employee | at once | **at once** (warehouse version 1) |
-| Change position · record an exit | at once | **at once** (SCD Type 2 step / leaver flag) |
+| Update a position · record an exit | at once | **at once** (SCD Type 2 step / leaver flag) |
 | Create a project · assign · close · submit a review | at once | after **Run warehouse ETL** (the warehouse loads in batches, decision B5) |
 
 ## 11. Speed: what is cached
