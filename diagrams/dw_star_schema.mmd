@@ -1,0 +1,135 @@
+%% Star schema (hr_dw): one fact table, four dimensions, and three support tables
+%% Generated from sql/04_dw_ddl.sql.
+erDiagram
+    dim_date {
+        INT date_sk PK
+        DATE full_date UK
+        TINYINT day_of_month
+        VARCHAR day_name
+        TINYINT day_of_week
+        BOOLEAN is_weekend
+        TINYINT week_of_year
+        TINYINT month_number
+        VARCHAR month_name
+        TINYINT quarter_number
+        CHAR quarter_label
+        SMALLINT calendar_year
+        CHAR year_month_label
+        CHAR fiscal_year
+        CHAR fiscal_quarter
+    }
+    dim_department {
+        INT department_sk PK
+        TINYINT department_id UK
+        VARCHAR department_code
+        VARCHAR department_name
+        DATETIME updated_at
+    }
+    dim_project {
+        INT project_sk PK
+        SMALLINT project_id UK
+        CHAR project_code
+        VARCHAR project_name
+        VARCHAR owning_department_name
+        VARCHAR project_manager_name
+        DATE start_date
+        DATE planned_end_date
+        DATE actual_end_date
+        SMALLINT planned_duration_days
+        SMALLINT delay_days
+        BOOLEAN is_delayed
+        VARCHAR status
+        VARCHAR priority
+        DECIMAL budget
+        VARCHAR budget_band
+        DATETIME updated_at
+    }
+    dim_employee {
+        INT employee_sk PK
+        INT employee_id
+        CHAR employee_code
+        VARCHAR full_name
+        VARCHAR gender
+        DATE date_of_birth
+        VARCHAR marital_status
+        VARCHAR education_level
+        VARCHAR education_field
+        TINYINT distance_from_home_km
+        TINYINT prior_experience_years
+        TINYINT prior_companies_count
+        DATE hire_date
+        DATE exit_date
+        VARCHAR exit_reason
+        BOOLEAN is_voluntary_exit
+        BOOLEAN attrition_flag
+        VARCHAR department_code
+        VARCHAR department_name
+        VARCHAR job_role
+        TINYINT job_level
+        VARCHAR job_level_title
+        INT manager_employee_id
+        VARCHAR manager_name
+        DECIMAL monthly_income
+        VARCHAR salary_band
+        TINYINT stock_option_level
+        VARCHAR business_travel
+        VARCHAR change_reason
+        DATE start_date
+        DATE end_date
+        BOOLEAN is_current
+        SMALLINT version_number
+        CHAR row_hash
+        INT current_version_key UK
+        INT etl_batch_id
+        DATETIME loaded_at
+        DATETIME updated_at
+    }
+    fact_performance_reviews {
+        INT review_id PK
+        INT date_sk FK
+        INT employee_sk FK
+        INT department_sk FK
+        INT project_sk FK
+        TINYINT performance_rating
+        DECIMAL kpi_score
+        TINYINT training_sessions
+        TINYINT overtime_flag
+        DECIMAL monthly_income_at_review
+        TINYINT environment_satisfaction
+        TINYINT job_satisfaction
+        TINYINT relationship_satisfaction
+        TINYINT work_life_balance
+        TINYINT job_involvement
+        INT etl_batch_id
+        DATETIME loaded_at
+    }
+    etl_batch_log {
+        INT log_id PK
+        INT batch_id
+        VARCHAR step_name
+        INT rows_affected
+        VARCHAR status
+        VARCHAR message
+        DATETIME started_at
+        DATETIME finished_at
+    }
+    etl_rejected_rows {
+        INT reject_id PK
+        INT batch_id
+        VARCHAR source_table
+        VARCHAR source_key
+        VARCHAR reason
+        DATETIME rejected_at
+    }
+    analytics_snapshot {
+        VARCHAR snapshot_key PK
+        INT batch_id
+        DATE computed_on
+        CHAR code_version
+        LONGBLOB payload
+    }
+
+    dim_date ||--o{ fact_performance_reviews : "date_sk"
+    dim_employee ||--o{ fact_performance_reviews : "employee_sk"
+    dim_department ||--o{ fact_performance_reviews : "department_sk"
+    dim_project ||--o{ fact_performance_reviews : "project_sk"
