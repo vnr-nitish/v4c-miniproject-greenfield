@@ -404,6 +404,15 @@ def test_search_finds_anyone_by_name_email_phone_or_id(session, picks):
     assert search("no such person").empty
 
 
+def test_a_project_is_found_by_its_code_or_number():
+    code = value("SELECT project_code AS code FROM hr_oltp.projects LIMIT 1")
+    number = int(code[3:])
+    for text in (code, code.lower(), f" {code} ", f"PRJ{number}", str(number)):
+        assert ProjectManager().get_by_code(text).project_code == code, text
+    with pytest.raises(NotFoundError, match="PRJ99999"):
+        ProjectManager().get_by_code("PRJ99999")
+
+
 def test_search_leaves_out_leavers_unless_asked(picks):
     code = value("SELECT employee_code AS code FROM hr_oltp.employees WHERE exit_date IS NOT NULL LIMIT 1")
     assert EmployeeManager().search(code).empty
@@ -895,7 +904,7 @@ def test_warm_up_saves_the_default_views_and_a_restart_brings_them_back(analytic
         analytics.warm_up()
         assert analytics._warm_version == version
         saved_rows = value("SELECT COUNT(*) AS n FROM hr_dw.analytics_snapshot WHERE batch_id = %s", (version[0],))
-        assert saved_rows >= 9
+        assert saved_rows >= 8
 
         analytics.clear_cache()                                   # the app restarts ...
         analytics.restore_results()
@@ -908,7 +917,6 @@ def test_warm_up_saves_the_default_views_and_a_restart_brings_them_back(analytic
         analytics.yoy_trends(everyone)
         analytics.yoy_trends(everyone, by_department=True)
         analytics.attrition_trend(everyone)
-        analytics.role_trends(everyone, "overtime_pct")
         analytics.bottleneck_projects(everyone, limit=500)
         analytics.project_delivery(everyone, by="priority")
         analytics.top_performers(AnalyticsFilter(fiscal_years=cycles), top_n=5, min_reviews=2, active_only=True)

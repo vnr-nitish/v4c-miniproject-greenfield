@@ -5,7 +5,7 @@ from src.dal import AnalyticsManager
 from src.ui import charts
 from src.ui.common import attempt, current_filters, note, page_header
 
-page_header("Project bottlenecks", "Open projects past their planned end, and where delivery slips")
+page_header("Project bottlenecks")
 am, filters = AnalyticsManager(), current_filters()
 
 overdue = attempt(lambda: am.bottleneck_projects(filters, limit=500))

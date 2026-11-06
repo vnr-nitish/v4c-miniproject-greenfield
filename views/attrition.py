@@ -6,10 +6,10 @@ from src.dal import AnalyticsFilter, AnalyticsManager
 from src.ui import charts, theme
 from src.ui.common import attempt, current_filters, note, page_header
 
-page_header("Attrition risk", "An explainable, back-tested points score from work-related factors HR can act on")
+page_header("Attrition risk")
 am, filters = AnalyticsManager(), current_filters()
 
-with st.spinner("Scoring the workforce (first visit after a data change takes ~20 s)…"):
+with st.spinner("Reading the warehouse…"):
     workforce = attempt(am.scored_workforce)
 if workforce is None:
     st.stop()

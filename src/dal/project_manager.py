@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, datetime
 from typing import Any
 
@@ -16,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 _PROJECT_SQL = ("SELECT project_id, project_code, project_name, description, department_id, project_manager_id, "
                 "start_date, planned_end_date, actual_end_date, budget, status, priority FROM hr_oltp.projects ")
+_NUMBER_OR_CODE = re.compile(r"(PRJ)?\d+")
 
 
 class ProjectManager(DatabaseConnection):
@@ -56,6 +58,16 @@ class ProjectManager(DatabaseConnection):
         row = self.fetch_one(_PROJECT_SQL + "WHERE project_id = %s", (project_id,))
         if row is None:
             raise NotFoundError(f"Project {project_id} not found")
+        return Project.from_row(row)
+
+    def get_by_code(self, project_code: str) -> Project:
+        """PRJ00718, prj718 and 718 all mean the same project."""
+        text = project_code.strip().upper()
+        if _NUMBER_OR_CODE.fullmatch(text):
+            text = f"PRJ{int(text.removeprefix('PRJ')):05d}"
+        row = self.fetch_one(_PROJECT_SQL + "WHERE project_code = %s", (text,))
+        if row is None:
+            raise NotFoundError(f"Project {project_code.strip()} not found")
         return Project.from_row(row)
 
     def search(self, text: str | None = None, status: str | None = None, department_id: int | None = None,

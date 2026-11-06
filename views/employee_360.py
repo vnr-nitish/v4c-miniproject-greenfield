@@ -13,20 +13,9 @@ from src.ui.forms import position_picker
 
 SEARCH_LIMIT = 50
 
-page_header("Employee 360", "Find anyone by name, e-mail, phone number or employee ID")
+page_header("Employee 360")
 show_announcement()
 em = EmployeeManager()
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def example_codes() -> list[str]:
-    return EmployeeManager().example_codes(6)
-
-
-def use_example() -> None:
-    """An example chip fills the search box. A callback, because it runs before the box is drawn."""
-    st.session_state["e360_search"] = st.session_state["e360_example"]
-    st.session_state["e360_example"] = None
 
 
 def read_employee(employee_id: int) -> tuple:
@@ -177,10 +166,7 @@ def exit_tab(employee: Employee, profile: dict[str, Any]) -> None:
                      "the warehouse updated.")
 
 
-examples = attempt(example_codes) or []
-c1, c2 = st.columns([2, 3])
-query = c1.text_input("Search", key="e360_search", placeholder="Name, e-mail, phone number or employee ID")
-c2.pills("Examples with a long history", examples, key="e360_example", on_change=use_example)
+query = st.text_input("Search", key="e360_search", placeholder="Name, e-mail, phone number or employee ID")
 if not query.strip():
     st.stop()
 found = attempt(lambda: em.search(query, active_only=False, limit=SEARCH_LIMIT))

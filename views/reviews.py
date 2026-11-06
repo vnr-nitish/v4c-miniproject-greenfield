@@ -9,7 +9,7 @@ from src.models import Review
 from src.models.review import RATING_LABELS
 from src.ui.common import attempt, editor_unlocked, note, page_header
 
-page_header("Performance review", "One review per employee and year — it reaches the warehouse on the next ETL run")
+page_header("Performance review")
 if not editor_unlocked():
     st.stop()
 rm, em = ReviewManager(), EmployeeManager()

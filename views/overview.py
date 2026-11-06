@@ -25,7 +25,7 @@ if overview:
         ("Overdue projects", f"{overview['overdue_projects']:,}", None, False),
     ])
 
-with st.spinner("Scoring the workforce (first visit after a data change takes ~20 s)…"):
+with st.spinner("Reading the warehouse…"):
     workforce = attempt(am.scored_workforce)
 if workforce is not None:
     scope = filters.select(workforce)
