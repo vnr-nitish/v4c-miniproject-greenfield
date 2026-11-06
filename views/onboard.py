@@ -1,32 +1,18 @@
 """Onboard a new employee: OLTP rows + the first SCD Type 2 version in the warehouse, in one transaction."""
 from datetime import date, timedelta
 
-import pandas as pd
 import streamlit as st
 
 from src.dal import EmployeeManager, ReferenceDataManager
 from src.models import Employee, Position
-from src.ui.common import attempt, data_changed, editor_unlocked, page_header
+from src.ui.common import announce, attempt, data_changed, editor_unlocked, page_header, show_announcement
 from src.ui.forms import position_picker
 
 page_header("Onboard an employee", "Validated as you go; the new hire appears in the warehouse immediately")
 if not editor_unlocked():
     st.stop()
 ref = ReferenceDataManager()
-
-
-@st.dialog("Employee onboarded", width="large", dismissible=False)
-def welcome(hired: Employee, versions: pd.DataFrame) -> None:
-    st.success(f"Welcome aboard, {hired.full_name} — employee code **{hired.employee_code}**.")
-    st.markdown("Warehouse row created in the same transaction (`dim_employee`, SCD Type 2 version 1):")
-    st.dataframe(versions, hide_index=True, width="stretch")
-    st.caption(f"Open **Employee 360** with code {hired.employee_code} to change their position.")
-    if st.button("OK", type="primary", key="onboard_ok"):
-        st.rerun()                                # closes the pop-up; the form behind it is already empty
-
-
-if "onboarded" in st.session_state:
-    welcome(*st.session_state.pop("onboarded"))
+show_announcement()
 
 # Every field's key carries this number: a new number means new, empty fields
 form_number = st.session_state.setdefault("onboard_form_number", 0)
@@ -65,7 +51,9 @@ if submitted:
     if hired:
         data_changed()
         versions = attempt(lambda: EmployeeManager().history(hired.employee_id))
-        st.session_state["onboarded"] = (hired, pd.DataFrame() if versions is None else versions)
         st.session_state["onboard_form_number"] = form_number + 1
-        st.rerun()
+        announce("Employee onboarded", f"Welcome aboard, {hired.full_name} — employee code **{hired.employee_code}**.",
+                 {} if versions is None else
+                 {"Warehouse row created in the same transaction (`dim_employee`, SCD Type 2 version 1):": versions},
+                 f"Open **Employee 360** with code {hired.employee_code} to change their position.")
 st.caption(f"Tip: hire dates up to {date.today() - timedelta(days=1)} let you try a job change the same day.")
