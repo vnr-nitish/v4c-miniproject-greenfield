@@ -6,7 +6,7 @@ star-schema data warehouse (with SCD Type 2 history), and a Streamlit web app pr
 data-entry forms and interactive dashboards.
 
 **Live app:** https://v4c-miniproject-greenfield-rvuytjcpc39yzy8xnsjus4.streamlit.app
-(data entry needs the editor passcode; the dashboards are public).
+(the whole site is open: anyone with the link can read the dashboards and enter data).
 
 ## Tech stack
 Python 3.11 (OOP, pandas, Faker) · MySQL 8 · Streamlit · Plotly · draw.io · GitHub · Streamlit Community Cloud
@@ -74,10 +74,10 @@ python scripts/run_etl.py --migrate --full-reload  # rebuild OLTP and warehouse 
 ```bash
 streamlit run app.py
 ```
-Data entry (onboarding, Employee 360 job changes with SCD Type 2, projects, reviews), warehouse
-dashboards (treemap, risk heatmap, YoY trends, DENSE_RANK leaderboard, project bubbles, career
-timeline) and an ETL page. Set `APP_PASSCODE` to protect data
-entry on a public deployment. Design: [`docs/ui_design.md`](docs/ui_design.md).
+Data entry (onboarding, Employee 360 search and job changes with SCD Type 2, projects, reviews),
+warehouse dashboards (treemap, YoY trends, DENSE_RANK top performers per department, attrition risk,
+project bubbles), each with its own filters, and an ETL page. There is no login: the site is open to
+everyone. Design: [`docs/ui_design.md`](docs/ui_design.md).
 
 ## Understanding the numbers on the dashboard
 Full page-by-page explanation: [`docs/website_guide.md`](docs/website_guide.md). The key definitions:
@@ -162,7 +162,6 @@ with a planned end date before today, so this number grows by itself as dates pa
    DB_PORT = "12345"
    DB_USER = "avnadmin"
    DB_PASSWORD = "…"
-   APP_PASSCODE = "…"        # unlocks data entry; dashboards stay public
    ```
    Root-level secrets become environment variables, which `DatabaseSettings.from_env()` reads — no code change.
 
@@ -183,7 +182,7 @@ Design, OOP principles and decisions: [`docs/backend_design.md`](docs/backend_de
 python -m pytest -q                        # everything (needs MySQL with the ETL loaded)
 python -m pytest tests/test_models.py -q   # entity rules only — no database needed
 ```
-228 tests, about 5 minutes. Database tests run inside rolled-back transactions — they use the real
+317 tests, about 7 minutes. Database tests run inside rolled-back transactions — they use the real
 data and never change it; they skip themselves when MySQL or the loaded data is missing.
 
 ## Design documentation

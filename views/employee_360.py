@@ -8,8 +8,7 @@ import streamlit as st
 from src.dal import EmployeeManager, ProjectManager, ReferenceDataManager, ReviewManager
 from src.models import Employee, Position
 from src.models.employee import GENDERS, MARITAL_STATUSES
-from src.ui.common import (announce, attempt, data_changed, editor_unlocked, fact_cards, is_unlocked, page_header,
-                           show_announcement)
+from src.ui.common import announce, attempt, data_changed, fact_cards, page_header, show_announcement
 from src.ui.forms import position_picker
 
 SEARCH_LIMIT = 50
@@ -36,8 +35,7 @@ def pick_from_matches(found: pd.DataFrame, query: str) -> int | None:
         return int(found.employee_id.iloc[0])
     st.caption(f"{'The first ' if len(found) == SEARCH_LIMIT else ''}{len(found)} matches — click a row to open that employee.")
     table = found.assign(status=found.is_active.map(lambda active: "Active" if active else "Left"))
-    contact = ["email", "phone"] if is_unlocked() else []
-    event = st.dataframe(table[["employee_code", "full_name", *contact, "department_name", "job_role", "status"]],
+    event = st.dataframe(table[["employee_code", "full_name", "email", "phone", "department_name", "job_role", "status"]],
                          hide_index=True, width="stretch", on_select="rerun", selection_mode="single-row",
                          key=f"e360_matches_{query}",
                          column_config={"employee_code": "Employee ID", "full_name": "Name", "email": "E-mail",
@@ -58,7 +56,7 @@ def details(employee: Employee, profile: dict[str, Any], versions: int) -> dict[
     if not employee.is_active:
         kind = "voluntary" if profile["is_voluntary_exit"] else "involuntary"
         employment += [("Exit date", employee.exit_date), ("Exit reason", f"{profile['exit_reason']} ({kind})")]
-    cards = {
+    return {
         "Current position": [
             ("Department", profile["department_name"]), ("Job role", profile["job_role"]),
             ("Job level", f"{profile['job_level']} · {profile['job_level_title']}"), ("Manager", profile["manager_name"]),
@@ -66,18 +64,16 @@ def details(employee: Employee, profile: dict[str, Any], versions: int) -> dict[
             ("Business travel", profile["business_travel"]), ("In this position since", profile["position_since"]),
             ("Last change", profile["last_change_reason"])],
         "Employment": employment,
-    }
-    if is_unlocked():
-        cards["Contact and personal"] = [
+        "Contact and personal": [
             ("E-mail", employee.email), ("Phone", employee.phone), ("Gender", employee.gender),
             ("Date of birth", f"{employee.date_of_birth} (age {employee.age_on(today)})"),
-            ("Marital status", employee.marital_status), ("Distance from home", f"{employee.distance_from_home_km} km")]
-        cards["Background"] = [
+            ("Marital status", employee.marital_status), ("Distance from home", f"{employee.distance_from_home_km} km")],
+        "Background": [
             ("Education level", profile["education_level"]), ("Education field", profile["education_field"]),
             ("Prior experience", years(employee.prior_experience_years)),
             ("Previous employers", employee.prior_companies_count),
-            ("Total experience", years(employee.total_experience_on(today)))]
-    return cards
+            ("Total experience", years(employee.total_experience_on(today)))],
+    }
 
 
 def change_position(employee: Employee, profile: dict[str, Any]) -> None:
@@ -139,8 +135,6 @@ def update_tab(employee: Employee, profile: dict[str, Any]) -> None:
     if not employee.is_active:
         st.info("This employee has left; their history is kept but can no longer change.")
         return
-    if not editor_unlocked("update"):
-        return
     part = st.segmented_control("What do you want to update?", ["Position", "Personal details"], default="Position",
                                 required=True, key=f"e360_update_{employee.employee_id}")
     if part == "Position":
@@ -152,8 +146,6 @@ def update_tab(employee: Employee, profile: dict[str, Any]) -> None:
 def exit_tab(employee: Employee, profile: dict[str, Any]) -> None:
     if not employee.is_active:
         st.info(f"{employee.full_name} left on {employee.exit_date}: {profile['exit_reason']}.")
-        return
-    if not editor_unlocked("exit"):
         return
     reasons = ReferenceDataManager().exit_reasons()
     with st.form(f"exit_{employee.employee_id}"):
@@ -170,18 +162,14 @@ def exit_tab(employee: Employee, profile: dict[str, Any]) -> None:
                      "the warehouse updated.")
 
 
-query = st.text_input("Search", key="e360_search", placeholder="Name, e-mail, phone number or employee ID"
-                      if is_unlocked() else "Name or employee ID")
+query = st.text_input("Search", key="e360_search", placeholder="Name, e-mail, phone number or employee ID")
 if not query.strip():
     st.stop()
-found = attempt(lambda: em.search(query, active_only=False, limit=SEARCH_LIMIT, by_contact=is_unlocked()))
+found = attempt(lambda: em.search(query, active_only=False, limit=SEARCH_LIMIT))
 if found is None:
     st.stop()
 if found.empty:
-    st.info(f"No employee matches “{query.strip()}”. Try part of a name, an e-mail, a phone number or an employee ID."
-            if is_unlocked() else
-            f"No employee matches “{query.strip()}”. Try part of a name or an employee ID; searching by e-mail or phone "
-            "number needs the passcode.")
+    st.info(f"No employee matches “{query.strip()}”. Try part of a name, an e-mail, a phone number or an employee ID.")
     st.stop()
 employee_id = pick_from_matches(found, query)
 if employee_id is None:
@@ -197,9 +185,6 @@ tab_details, tab_timeline, tab_update, tab_work, tab_exit = st.tabs(
     ["Details", "Career timeline", "Update", "Reviews & projects", "Exit"])
 with tab_details:
     fact_cards(details(employee, profile, len(history)))
-    if not is_unlocked():
-        st.caption("Contact and personal details appear after the passcode is entered.")
-        editor_unlocked("details")
 with tab_timeline:
     st.dataframe(history, hide_index=True, width="stretch")
 with tab_update:

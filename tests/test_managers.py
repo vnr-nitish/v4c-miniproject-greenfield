@@ -413,15 +413,6 @@ def test_a_project_is_found_by_its_code_or_number():
         ProjectManager().get_by_code("PRJ99999")
 
 
-def test_search_can_leave_contact_details_out_of_the_matching(session, picks):
-    email = f"{uuid4().hex[:12]}@example.com"
-    hired = hire(picks, first_name="Zzyzx", last_name="Quorra", email=email, phone="+91 (99887) 76-655")
-    search = lambda text: EmployeeManager().search(text, active_only=False, by_contact=False)    # noqa: E731
-    assert search(email).empty and search(email[:8]).empty and search("9988776655").empty
-    for text in ("Zzyzx Quorra", hired.employee_code, str(hired.employee_id)):
-        assert hired.employee_id in search(text).employee_id.tolist(), text
-
-
 def test_search_leaves_out_leavers_unless_asked(picks):
     code = value("SELECT employee_code AS code FROM hr_oltp.employees WHERE exit_date IS NOT NULL LIMIT 1")
     assert EmployeeManager().search(code).empty

@@ -1,4 +1,4 @@
-"""HR Analytics — Streamlit entry point: navigation, global filters, analytics warm-up.
+"""HR Analytics — Streamlit entry point: navigation and analytics warm-up.
 
 Run locally:  streamlit run app.py
 Pages live in views/; they use only the Phase 3 managers (src/dal) — no SQL in the UI.
@@ -12,7 +12,7 @@ import time
 
 import streamlit as st
 
-from src.dal import AnalyticsFilter, AnalyticsManager, ReferenceDataManager
+from src.dal import AnalyticsManager, ReferenceDataManager
 from src.exceptions import HRAppError, PoolBusyError
 from src.ui.common import attempt
 from src.ui.theme import inject_css
@@ -42,22 +42,6 @@ def start_warm_up() -> threading.Thread:
     thread = threading.Thread(target=keep_warm, name="analytics-warm-up", daemon=True)
     thread.start()
     return thread
-
-
-def sidebar_filters() -> None:
-    try:
-        options = AnalyticsManager().filter_options()
-    except HRAppError as err:
-        st.sidebar.warning(f"Filters are not available right now: {err}")
-        return
-    st.sidebar.markdown("### Filters")
-    st.sidebar.caption("Apply to every analytics page.")
-    departments = st.sidebar.multiselect("Department", options["departments"])
-    levels = st.sidebar.multiselect("Job level", options["job_levels"])
-    cycles = st.sidebar.multiselect("Review cycle", options["fiscal_years"],
-                                    help="FY2024-25 = reviews of performance year 2024")
-    st.session_state["filters"] = AnalyticsFilter(tuple(departments), tuple(levels), tuple(cycles))
-    st.session_state["cycles"] = options["fiscal_years"]
 
 
 try:
@@ -95,5 +79,4 @@ pages = {
     "Operations": [st.Page("views/operations.py", title="ETL & data health", icon=":material/sync:")],
 }
 navigation = st.navigation(pages)
-sidebar_filters()
 attempt(navigation.run)                               # a problem a page did not handle: a message, not a crash screen

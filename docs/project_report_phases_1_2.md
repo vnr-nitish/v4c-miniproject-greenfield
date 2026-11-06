@@ -665,7 +665,7 @@ update share **one transaction** (E3).
 - every fact linked to the employee version valid on its review date;
 - re-running the ETL changes nothing; a department change creates exactly one new version.
 
-The whole project's test suite (Phases 1–5) has **228 tests, all passing**.
+The whole project's test suite (Phases 1–5) has **317 tests, all passing**.
 
 ---
 

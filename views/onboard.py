@@ -5,12 +5,10 @@ import streamlit as st
 
 from src.dal import EmployeeManager, ReferenceDataManager
 from src.models import Employee, Position
-from src.ui.common import announce, attempt, data_changed, editor_unlocked, page_header, show_announcement
+from src.ui.common import announce, attempt, data_changed, page_header, show_announcement
 from src.ui.forms import position_picker
 
 page_header("Onboard an employee")
-if not editor_unlocked():
-    st.stop()
 ref = ReferenceDataManager()
 show_announcement()
 

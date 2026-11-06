@@ -2,13 +2,15 @@
 import pandas as pd
 import streamlit as st
 
-from src.dal import AnalyticsManager
+from src.dal import AnalyticsFilter, AnalyticsManager
 from src.dal.analytics_manager import MAX_RISK_SCORE
 from src.ui import charts, theme
-from src.ui.common import attempt, current_filters, page_header
+from src.ui.common import attempt, department_filter, job_level_filter, page_header
 
 page_header("Attrition risk")
-am, filters = AnalyticsManager(), current_filters()
+am = AnalyticsManager()
+department_column, level_column, _ = st.columns([1, 1, 2])
+filters = AnalyticsFilter(department_filter(department_column), job_level_filter(level_column))
 
 with st.spinner("Reading the warehouse…"):
     workforce = attempt(am.scored_workforce)

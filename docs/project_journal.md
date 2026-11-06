@@ -723,3 +723,17 @@ with a decimal was correct (Medium: 14,290 late days / 244 late projects = 58.6)
 
 **Privacy:** the public site showed real e-mail addresses and phone numbers typed in during tests. Contact and
 personal details, and searching by them, now need the passcode.
+
+## Step 31 — An open site, and filters on each page
+
+**No password:** the trainer asked for the site to be open, so the passcode was removed everywhere: code, tests,
+settings and docs (`docs/ui_design.md`, U9). Data entry, the ETL button and every employee's details are open to
+anyone with the link, which also undoes the privacy step above; the user accepted that the test records stay
+as they are. `APP_PASSCODE` can be deleted from the Streamlit secrets; the code no longer reads it.
+
+**Filters:** the three sidebar filters were replaced by dropdowns on each analytics page, only those that mean
+something there (U10): Department on the Command centre and Project bottlenecks; Department and Job level on
+Performance trends and Attrition risk; Job level and Review cycles on Top performers. Measured from the laptop on
+the cloud database, a first choice takes 1–7 s and Attrition risk is instant, because it slices results in memory.
+
+The year-over-year table is no longer folded away. Whole suite: **317 / 317**.

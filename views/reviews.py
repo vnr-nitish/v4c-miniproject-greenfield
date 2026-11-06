@@ -7,11 +7,9 @@ import streamlit as st
 from src.dal import EmployeeManager, ReviewManager
 from src.models import Review
 from src.models.review import RATING_LABELS
-from src.ui.common import attempt, editor_unlocked, note, page_header
+from src.ui.common import attempt, note, page_header
 
 page_header("Performance review")
-if not editor_unlocked():
-    st.stop()
 rm, em = ReviewManager(), EmployeeManager()
 
 c1, c2 = st.columns(2)

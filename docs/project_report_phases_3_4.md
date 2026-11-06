@@ -276,10 +276,10 @@ it, and after the full suite every table's checksum equals the one before.
 | Requirement | Where in the app |
 |---|---|
 | Forms to **onboard employees, create projects, submit reviews** | Onboard employee · Projects · Performance review pages |
-| **Changing an employee's department triggers SCD Type 2** in the warehouse | Employee 360 → Change position: shows the expired and the new warehouse row side by side |
+| **Changing an employee's department triggers SCD Type 2** in the warehouse | Employee 360 → Update → Position: a pop-up shows the expired and the new warehouse row |
 | Connect directly to the **data warehouse** (star schema) | every analytics page reads `hr_dw` through `AnalyticsManager` |
 | Interactive **Plotly** charts: **year-over-year trends** | Performance trends page |
-| **Top performers by department** with **DENSE_RANK()** | Top performers page (the SQL is shown on the page) |
+| **Top performers by department** with **DENSE_RANK()** | Top performers page |
 | **Attrition risk or project bottlenecks** | **both** — Attrition risk and Project bottlenecks pages |
 | Replace the command-line interface | everyday actions in the app, including a **Run ETL** button |
 
@@ -287,7 +287,7 @@ it, and after the full suite every table's checksum equals the one before.
 
 ```
  Browser ──► Streamlit app (Streamlit Community Cloud)
-               app.py         navigation · sidebar filters · health check · background warm-up
+               app.py         navigation · health check · background warm-up
                views/*.py     one file per page — widgets and charts, no SQL
                src/ui/        theme, chart builders, the shared position picker, helpers
                     │ calls
@@ -300,27 +300,29 @@ it, and after the full suite every table's checksum equals the one before.
   the manager, which saves everything in one transaction.
 - **Dashboards read the warehouse only.**
 - **Messages:** yellow = something you can fix; red = a database problem.
-- **Background warm-up:** when the app starts, a thread computes the slow company-wide analytics so
-  the first visitor does not wait.
-- **Passcode:** on the public site, data entry and the ETL button are unlocked with the editor
-  passcode (the `APP_PASSCODE` secret); dashboards are open to everyone.
+- **Background warm-up:** the slow default results are saved in the database and read back when the
+  app starts, so the first visitor after a wake-up waits seconds, not minutes. A thread keeps them current.
+- **No password:** the whole site is open, including data entry and the ETL button, as the trainer asked.
 
 ## 14. Look and design decisions
 
 | ID | Decision | Why |
 |---|---|---|
 | U1 | Dark "command centre" theme with a gradient header and colour-coded tiles | a distinctive, consistent look |
-| U3 | Data entry behind a passcode on the public site | nobody can change data without it |
 | U5 | **Colours carry meaning**: one colour per department everywhere, risk bands green → red, priorities likewise | replaced a first design that used one purple everywhere |
-| U7 | Background warm-up of the analytics cache | the first visitor doesn't wait for the risk score |
+| U7 | Background warm-up, with results saved across restarts | the first visitor doesn't wait for minutes of queries |
+| U9 | No password anywhere | the trainer asked for the site to be open |
+| U10 | Filters on each analytics page, only those that mean something there | clearer than one set in the sidebar |
 | U8 | **3D charts replaced by 2D charts** after a team review | 3D was hard to read precisely and to explain; each 2D chart answers one question |
 | — | One chart per question, plus the exact table where it matters | charts show the pattern, tables give the values |
 
 ## 15. The pages, one by one
 
-### Sidebar: navigation and filters
-Four sections — Overview, Data entry, Analytics (warehouse), Operations — and three **filters**
-(Department, Job level, Review cycle) that apply to every analytics page at once.
+### Navigation and filters
+The sidebar is the page menu, with four sections: Overview, Data entry, Analytics (warehouse) and
+Operations. Each analytics page has its own **filters** in a row under its heading, starting on *All*:
+Department on the Command centre and Project bottlenecks; Department and Job level on Performance
+trends and Attrition risk; Job level and Review cycles on Top performers.
 
 ### 15.1 Command centre (Overview)
 
@@ -346,25 +348,29 @@ employees by years at the company, split by risk band.
 2. **Person:** names, e-mail, phone, gender, marital status, date of birth, hire date, distance,
    education, experience, previous employers.
 3. **Onboard:** the Employee entity lists every broken rule under its field; `onboard()` saves the
-   person, the first job version and the **first warehouse row** in one transaction; success shows
-   the new code, the warehouse row, and **balloons** (only on a successful hire).
+   person, the first job version and the **first warehouse row** in one transaction; success opens a
+   **pop-up** with the new code and the warehouse row, and OK leaves an empty form.
 
 ### 15.3 Employee 360 · job change
-- **Find:** type an employee code or click an example (people with the longest history).
-- **Career timeline:** one bar per SCD Type 2 version, coloured by department, plus the version table.
-- **Change position:** the same position picker, pre-filled; effective date (today or earlier, one
+- **Find:** one search box for a name, e-mail, phone number or employee ID. One match opens at once;
+  several are listed to click.
+- **Details:** current position, employment, contact and personal details, background.
+- **Career timeline:** the table of SCD Type 2 versions.
+- **Update → Position:** the same position picker, pre-filled; effective date (today or earlier, one
   change per day); reason chosen or derived (Promotion > Transfer > Role Change > Manager Change >
-  Salary Revision). **Apply change** → the page shows the **expired** warehouse row (red) and the
-  **new current** row (green) side by side, and the timeline with the new bar.
-- **Reviews · projects · exit:** the person's reviews and assignments; **record an exit** (ends open
-  assignments, marks the person as a leaver in the warehouse).
+  Salary Revision). **Apply change** → a pop-up shows the **expired** warehouse row and the **new
+  current** row.
+- **Update → Personal details:** correct the name, contact details, education and so on (SCD Type 1).
+- **Reviews & projects:** the person's reviews and assignments, to read.
+- **Exit:** record an exit (ends open assignments, marks the person as a leaver in the warehouse).
 
 ### 15.4 Projects
 
 | Tab | What you can do |
 |---|---|
-| Browse & close | search by code or name, filter by status; click a project to see its team; close it as Completed or Cancelled (open assignments end) |
-| Create | owning department, project manager, name, dates, budget, priority, status; the next PRJ code is generated |
+| Dashboard | all projects: search by code or name, filter by status |
+| Project details | type a project code and press Submit: details, team, edit, or close as Completed or Cancelled (open assignments end) |
+| Create | all in one box: name, owning department, project manager, dates, budget, priority, status; the next PRJ code is generated |
 | Assign people | project, employee code, role, allocation %, start date; a warning if the person would go above 100 %, with "assign anyway" |
 
 ### 15.5 Performance review
@@ -374,24 +380,22 @@ and comments. Refused with a message: a second review for the same year, a futur
 joined after that year, a reviewer not employed on that date, self-review.
 
 ### 15.6 Performance trends (year-over-year)
-Metric buttons (KPI, rating, outstanding %, overtime %, satisfaction, training); **compare
-departments** (one line each); tiles with the change against the previous cycle; the `LAG()` table;
-a **heatmap** of a metric by job role × review cycle.
+Tiles with the change against the previous cycle; metric buttons (KPI, rating, outstanding %, overtime %,
+satisfaction, training) and **compare departments** (one line each) above the graph; the `LAG()` table.
 
 ### 15.7 Top performers (DENSE_RANK)
-Controls: review cycles, ranks per department, minimum number of reviews, current staff only.
-**Medal cards** 🥇🥈🥉 per department (with "+N tied"), a **leaderboard chart**, a table per department
-with rank and tie count, and the actual **SQL** shown on the page.
+Controls: review cycles, job level, and +/- boxes for ranks per department and minimum reviews. Only
+current staff are shown. **One tab per department**, each with a table of its top ranks.
 
 ### 15.8 Attrition risk
-A **heatmap** of the share at high risk by job level × years at the company; employees per band per
-department; which warning signs the at-risk people share; the **at-risk list** — click a person to see
-their score and factors; the **back-test** evidence; **attrition per fiscal year**.
+Three charts in one row: employees per band per department; which warning signs the at-risk people
+share; the **back-test** evidence. Below them, the **at-risk list**: click **View** to see a person's
+score and factors in a pop-up.
 
 ### 15.9 Project bottlenecks
-A **bubble chart** of overdue open projects (days overdue × team overtime; size = budget; colour =
-priority) — top right = the real bottlenecks; the overdue list; % of completed projects finished late
-and the average delay by priority, budget band, department or year.
+Two tabs. **Overdue projects:** a bubble chart (days overdue × team overtime; size = budget; colour =
+priority), where the top right needs attention first, and the overdue list. **Completed projects:** %
+finished late and the average delay in days, by priority, budget band, department or year.
 
 ### 15.10 ETL & data health (Operations)
 The current warehouse version; **Run warehouse ETL** (with every step and row count shown live); the
@@ -407,11 +411,10 @@ recent batches with their steps and any rejected rows.
 
 ## 17. Testing the web application
 
-`tests/test_app.py` — **17 tests** with Streamlit's `AppTest`: every page renders against the real
-data without an error; the app shows its three filters; invalid onboarding shows field messages; every
-data-entry page renders its passcode form when a passcode is set. The UI tests run both against the
-local database and against the cloud database used by the live site. Whole project: **228 tests,
-all passing**.
+`tests/test_app.py` uses Streamlit's `AppTest`: every page renders against the real data without an
+error; each page has only its own filters, and choosing one works; no page asks for a password; invalid
+input shows field messages and keeps what was typed; each save ends in its pop-up, with saving replaced so
+that nothing is written. Whole project: **317 tests, all passing**.
 
 ## 18. Phase 3 and 4 decisions in one table
 

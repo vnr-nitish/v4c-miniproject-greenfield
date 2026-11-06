@@ -37,7 +37,7 @@ def test_page_renders(page):
 def test_app_shell_renders():
     at = AppTest.from_file("../app.py", default_timeout=180).run()
     assert not at.exception, at.exception
-    assert len(at.sidebar.multiselect) == 3          # department, job level, review cycle filters
+    assert not at.sidebar.multiselect and not at.sidebar.selectbox   # the page menu only
 
 
 def test_long_bar_labels_stay_horizontal_and_are_not_repeated_in_a_legend():
@@ -84,28 +84,14 @@ def test_an_unreachable_database_shows_what_to_check(monkeypatch):
 @pytest.mark.parametrize("error, shown", [(PoolBusyError("connections are busy"), "warning"),
                                           (DatabaseError("connection lost"), "error")])
 def test_a_problem_no_page_handled_is_a_message_not_a_crash(error, shown, monkeypatch):
-    monkeypatch.setattr("src.ui.common.current_filters", raiser(error))
+    monkeypatch.setattr("src.ui.common.department_filter", raiser(error))
     at = AppTest.from_file("../app.py", default_timeout=180).run()
     assert not at.exception, at.exception
     assert any(str(error) in element.value for element in getattr(at, shown))
 
 
-@pytest.mark.parametrize("page", ["onboard", "employee_360", "projects", "reviews", "operations"])
-def test_data_entry_pages_are_locked_by_the_passcode(page, monkeypatch):
-    """With APP_PASSCODE set (the public site), every data-entry page renders its unlock form(s)."""
-    monkeypatch.setenv("APP_PASSCODE", "test-passcode")
-    at = AppTest.from_file(f"../views/{page}.py", default_timeout=180)
-    at.session_state["e360_search"] = long_career().employee_code          # Employee 360 asks after a search
-    at.run()
-    assert not at.exception, at.exception
-    assert any("protected" in i.value for i in at.info)
-
-
-def test_invalid_onboarding_shows_field_errors(monkeypatch):
-    monkeypatch.delenv("APP_PASSCODE", raising=False)
-    at = AppTest.from_file("../views/onboard.py", default_timeout=180)
-    at.session_state["editor"] = True                # unlocked, whatever the environment says
-    at.run()
+def test_invalid_onboarding_shows_field_errors():
+    at = AppTest.from_file("../views/onboard.py", default_timeout=180).run()
     at.text_input[0].input("Asha2").run()            # invalid first name, other fields empty
     at.button[0].click().run()
     assert not at.exception
@@ -113,15 +99,12 @@ def test_invalid_onboarding_shows_field_errors(monkeypatch):
 
 
 def onboarding_form(monkeypatch):
-    """The onboarding page, unlocked, with the save replaced: nothing is written to the database."""
-    monkeypatch.delenv("APP_PASSCODE", raising=False)
+    """The onboarding page with the save replaced: nothing is written to the database."""
     manager = EmployeeManager()
     existing = manager.get_by_code(manager.example_codes(1)[0])
     saved = []
     monkeypatch.setattr(EmployeeManager, "onboard", lambda self, employee, position: saved.append(position) or existing)
-    at = AppTest.from_file("../views/onboard.py", default_timeout=180)
-    at.session_state["editor"] = True
-    at.run()
+    at = AppTest.from_file("../views/onboard.py", default_timeout=180).run()
     return at, existing, saved
 
 
@@ -190,8 +173,7 @@ def long_career():
     return manager.get_by_code(manager.example_codes(1)[0])
 
 
-def employee_page(monkeypatch, query: str) -> AppTest:
-    monkeypatch.delenv("APP_PASSCODE", raising=False)
+def employee_page(query: str) -> AppTest:
     at = AppTest.from_file("../views/employee_360.py", default_timeout=180)
     at.session_state["e360_search"] = query
     at.run()
@@ -204,15 +186,15 @@ def press(at: AppTest, label: str) -> None:
     assert not at.exception, at.exception
 
 
-def test_employee_360_starts_with_only_the_search(monkeypatch):
-    at = employee_page(monkeypatch, "")
+def test_employee_360_starts_with_only_the_search():
+    at = employee_page("")
     assert not at.tabs and at.text_input(key="e360_search").value == ""
 
 
 @pytest.mark.parametrize("field", ["employee_code", "email", "employee_id"])
-def test_employee_360_opens_on_an_exact_search(field, monkeypatch):
+def test_employee_360_opens_on_an_exact_search(field):
     employee = long_career()
-    at = employee_page(monkeypatch, str(getattr(employee, field)))
+    at = employee_page(str(getattr(employee, field)))
     assert [tab.label for tab in at.tabs] == TABS
     assert any(employee.employee_code in m.value for m in at.markdown)
     assert not at.metric and not at.get("plotly_chart")                    # no boxes, and the timeline is a table
@@ -222,20 +204,20 @@ def test_employee_360_opens_on_an_exact_search(field, monkeypatch):
     assert len(at.tabs[3].dataframe) == 2                                  # reviews and projects
 
 
-def test_employee_360_lists_several_matches_before_opening_one(monkeypatch):
-    at = employee_page(monkeypatch, "an")
+def test_employee_360_lists_several_matches_before_opening_one():
+    at = employee_page("an")
     assert not at.tabs and len(at.dataframe) == 1
     assert any("matches" in c.value for c in at.caption)
 
 
-def test_employee_360_lists_everyone_who_shares_a_phone_number(monkeypatch):
+def test_employee_360_lists_everyone_who_shares_a_phone_number():
     """The generated data has about 5,000 different numbers for 100,000 people."""
-    at = employee_page(monkeypatch, long_career().phone)
+    at = employee_page(long_career().phone)
     assert not at.tabs and len(at.dataframe) == 1
 
 
-def test_employee_360_says_when_nobody_matches(monkeypatch):
-    at = employee_page(monkeypatch, "no such person")
+def test_employee_360_says_when_nobody_matches():
+    at = employee_page("no such person")
     assert not at.tabs and any("No employee matches" in i.value for i in at.info)
 
 
@@ -243,7 +225,7 @@ def test_employee_360_updates_personal_details_in_a_pop_up(monkeypatch):
     employee = long_career()
     saved = []
     monkeypatch.setattr(EmployeeManager, "update_details", lambda self, e: saved.append(e) or e)    # nothing is written
-    at = employee_page(monkeypatch, employee.employee_code)
+    at = employee_page(employee.employee_code)
     at.button_group(key=f"e360_update_{employee.employee_id}").set_value("Personal details").run()
     assert not at.exception, at.exception
     next(field for field in at.text_input if field.label == "Last name").input("Changed")
@@ -259,7 +241,7 @@ def test_employee_360_refuses_invalid_personal_details(monkeypatch):
     employee = long_career()
     saved = []
     monkeypatch.setattr(EmployeeManager, "update_details", lambda self, e: saved.append(e) or e)
-    at = employee_page(monkeypatch, employee.employee_code)
+    at = employee_page(employee.employee_code)
     at.button_group(key=f"e360_update_{employee.employee_id}").set_value("Personal details").run()
     next(field for field in at.text_input if field.label == "E-mail").input("not an address")
     press(at, "Save details")
@@ -271,7 +253,7 @@ def test_employee_360_changes_position_in_a_pop_up(monkeypatch):
     history = EmployeeManager().history(employee.employee_id)
     outcome = PositionChange(employee.employee_id, 1, "Transfer", date.today(), 999, history)
     monkeypatch.setattr(EmployeeManager, "change_position", lambda self, *args: outcome)            # nothing is written
-    at = employee_page(monkeypatch, employee.employee_code)
+    at = employee_page(employee.employee_code)
     press(at, "Apply change")
     assert any("Transfer recorded" in s.value for s in at.success)
 
@@ -293,7 +275,7 @@ def test_a_position_change_starts_from_what_is_true_today(condition, monkeypatch
         return PositionChange(employee_id, 1, "Transfer", date.today(), 999, self.history(employee_id))
 
     monkeypatch.setattr(EmployeeManager, "change_position", record)                                 # nothing is written
-    at = employee_page(monkeypatch, code)
+    at = employee_page(code)
     press(at, "Apply change")
     assert sent and sent[0].manager_id == current.manager_id
     assert sent[0].business_travel == current.business_travel
@@ -305,15 +287,15 @@ def test_a_position_change_starts_from_what_is_true_today(condition, monkeypatch
 def test_employee_360_records_an_exit_in_a_pop_up(monkeypatch):
     employee = long_career()
     monkeypatch.setattr(EmployeeManager, "record_exit", lambda self, *args: 2)                      # nothing is written
-    at = employee_page(monkeypatch, employee.employee_code)
+    at = employee_page(employee.employee_code)
     press(at, "Record exit")
     assert any("2 assignment(s) closed" in s.value for s in at.success)
 
 
-def test_employee_360_keeps_a_leaver_read_only(monkeypatch):
+def test_employee_360_keeps_a_leaver_read_only():
     code = DatabaseConnection().fetch_one("SELECT employee_code FROM hr_oltp.employees "
                                           "WHERE exit_date IS NOT NULL LIMIT 1")["employee_code"]
-    at = employee_page(monkeypatch, code)
+    at = employee_page(code)
     assert [tab.label for tab in at.tabs] == TABS
     assert any("can no longer change" in i.value for i in at.tabs[2].info)
     assert any("left on" in i.value for i in at.tabs[4].info)
@@ -321,7 +303,7 @@ def test_employee_360_keeps_a_leaver_read_only(monkeypatch):
 
 
 @pytest.mark.parametrize("page", PAGES)
-def test_page_headings_have_no_line_under_them(page, monkeypatch):
+def test_page_headings_have_no_line_under_them(page):
     at = AppTest.from_file(f"../views/{page}.py", default_timeout=180).run()
     heading = next(m.value for m in at.markdown if "class='hero'" in m.value)
     assert "<p>" not in heading
@@ -329,8 +311,7 @@ def test_page_headings_have_no_line_under_them(page, monkeypatch):
 
 # ----------------------------------------------------------------------------- Projects
 
-def projects_page(monkeypatch) -> AppTest:
-    monkeypatch.delenv("APP_PASSCODE", raising=False)
+def projects_page() -> AppTest:
     at = AppTest.from_file("../views/projects.py", default_timeout=180).run()
     assert not at.exception, at.exception
     return at
@@ -345,16 +326,16 @@ def active_project():
     return ProjectManager().search(status="Active", limit=1).iloc[0]
 
 
-def test_projects_has_four_tabs_and_a_dashboard_without_row_selection(monkeypatch):
-    at = projects_page(monkeypatch)
+def test_projects_has_four_tabs_and_a_dashboard_without_row_selection():
+    at = projects_page()
     assert [tab.label for tab in at.tabs] == ["Dashboard", "Project details", "Create", "Assign people"]
     assert len(at.tabs[0].dataframe) == 1
     assert not any(m.value.startswith("### ") for m in at.tabs[1].markdown)      # nothing until Submit
 
 
-def test_project_details_appear_after_submit_and_change_with_the_next_code(monkeypatch):
+def test_project_details_appear_after_submit_and_change_with_the_next_code():
     first, second = ProjectManager().search(status="Active", limit=2).project_code
-    at = projects_page(monkeypatch)
+    at = projects_page()
     look_up(at, first)
     assert any(first in m.value for m in at.tabs[1].markdown if m.value.startswith("### "))
     assert len(at.tabs[1].dataframe) == 1                                        # the team
@@ -362,8 +343,8 @@ def test_project_details_appear_after_submit_and_change_with_the_next_code(monke
     assert any(second in m.value for m in at.tabs[1].markdown if m.value.startswith("### "))
 
 
-def test_project_details_say_when_the_code_is_unknown(monkeypatch):
-    at = projects_page(monkeypatch)
+def test_project_details_say_when_the_code_is_unknown():
+    at = projects_page()
     look_up(at, "PRJ99999")
     assert any("PRJ99999 not found" in w.value for w in at.warning)
 
@@ -371,7 +352,7 @@ def test_project_details_say_when_the_code_is_unknown(monkeypatch):
 def test_project_is_edited_and_closed_in_a_pop_up(monkeypatch):
     saved = []
     monkeypatch.setattr(ProjectManager, "update", lambda self, project: saved.append(project) or project)  # nothing written
-    at = projects_page(monkeypatch)
+    at = projects_page()
     look_up(at, active_project().project_code)
     next(field for field in at.text_input if field.label == "Project name").input("Renamed")
     press(at, "Save changes")
@@ -388,7 +369,7 @@ def test_a_new_project_is_created_with_its_department_in_the_same_box(monkeypatc
     made = []
     monkeypatch.setattr(ProjectManager, "create", lambda self, project: made.append(project) or
                         project.with_changes(project_id=1, project_code="PRJ00001"))                      # nothing written
-    at = projects_page(monkeypatch)
+    at = projects_page()
     at.selectbox(key="create_department_0").set_value(3).run()                   # Sales: the managers follow
     assert not at.exception, at.exception
     at.text_input(key="create_name_0").input("New platform")
@@ -400,11 +381,11 @@ def test_a_new_project_is_created_with_its_department_in_the_same_box(monkeypatc
 
 # ----------------------------------------------------------------------------- Trends and top performers
 
-def test_trends_has_one_chart_and_no_heatmap(monkeypatch):
+def test_trends_has_one_chart_and_no_heatmap():
     at = AppTest.from_file("../views/trends.py", default_timeout=180).run()
     assert not at.exception, at.exception
     assert len(at.get("plotly_chart")) == 1
-    assert len(at.dataframe) == 1 and not at.get("pills")
+    assert len(at.dataframe) == 1 and not at.get("pills") and not at.expander   # the table is not folded away
 
 
 def test_top_performers_has_a_table_per_department_with_plus_and_minus_boxes():
@@ -437,50 +418,65 @@ def test_bottlenecks_groups_completed_projects(group):
     assert len(at.tabs[1].get("plotly_chart")) == 2
 
 
-# ----------------------------------------------------------------------------- what the public site hides
+# ----------------------------------------------------------------------------- filters on each page
 
-def locked_employee_page(monkeypatch, query: str) -> AppTest:
-    monkeypatch.setenv("APP_PASSCODE", "test-passcode")
-    at = AppTest.from_file("../views/employee_360.py", default_timeout=180)
-    at.session_state["e360_search"] = query
+def labels_of(at: AppTest) -> list[str]:
+    return [box.label for box in at.selectbox if box.label in ("Department", "Job level")]
+
+
+@pytest.mark.parametrize("page, filters", [("overview", ["Department"]), ("trends", ["Department", "Job level"]),
+                                           ("top_performers", ["Job level"]), ("attrition", ["Department", "Job level"]),
+                                           ("bottlenecks", ["Department"]), ("operations", [])])
+def test_each_page_has_only_the_filters_it_needs(page, filters):
+    at = AppTest.from_file(f"../views/{page}.py", default_timeout=180).run()
+    assert not at.exception, at.exception
+    assert labels_of(at) == filters
+    assert all(box.value == "All" for box in at.selectbox if box.label in filters)
+
+
+def choose(at: AppTest, label: str, value) -> None:
+    next(box for box in at.selectbox if box.label == label).set_value(value).run()
+    assert not at.exception, at.exception
+
+
+@pytest.mark.parametrize("page", ["overview", "trends", "attrition", "bottlenecks"])
+def test_a_department_can_be_chosen(page):
+    at = AppTest.from_file(f"../views/{page}.py", default_timeout=180).run()
+    choose(at, "Department", "Human Resources")
+
+
+@pytest.mark.parametrize("page", ["trends", "top_performers", "attrition"])
+def test_a_job_level_can_be_chosen(page):
+    at = AppTest.from_file(f"../views/{page}.py", default_timeout=180).run()
+    choose(at, "Job level", 5)
+
+
+def test_attrition_shows_only_the_chosen_department_and_level():
+    at = AppTest.from_file("../views/attrition.py", default_timeout=180).run()
+    choose(at, "Department", "Sales")
+    choose(at, "Job level", 2)
+    table = at.dataframe[0].value
+    assert set(table.department_name) == {"Sales"} and set(table.job_level) == {2}
+    assert len(at.get("plotly_chart")) == 3
+
+
+def test_compare_departments_shows_only_for_all_departments():
+    at = AppTest.from_file("../views/trends.py", default_timeout=180).run()
+    assert [toggle.label for toggle in at.toggle] == ["Compare departments"]
+    choose(at, "Department", "Sales")
+    assert not at.toggle
+
+
+# ----------------------------------------------------------------------------- the site is open to everyone
+
+@pytest.mark.parametrize("page", PAGES)
+def test_no_page_asks_for_a_password(page):
+    at = AppTest.from_file(f"../views/{page}.py", default_timeout=180)
+    at.session_state["e360_search"] = long_career().employee_code
     at.run()
     assert not at.exception, at.exception
-    return at
-
-
-def test_contact_details_are_hidden_until_the_passcode_is_entered(monkeypatch):
-    employee = long_career()
-    at = locked_employee_page(monkeypatch, employee.employee_code)
-    assert [tab.label for tab in at.tabs] == TABS
-    details = " ".join(m.value for m in at.tabs[0].markdown)
-    assert employee.employee_code in details
-    assert employee.email not in details and employee.phone not in details and str(employee.date_of_birth) not in details
-
-
-@pytest.mark.parametrize("field", ["email", "phone"])
-def test_the_public_site_cannot_search_by_contact_details(field, monkeypatch):
-    at = locked_employee_page(monkeypatch, getattr(long_career(), field))
-    assert not at.tabs and not at.dataframe
-    assert any("needs the passcode" in i.value for i in at.info)
-
-
-def test_the_list_of_matches_shows_no_contact_details_until_unlocked(monkeypatch):
-    at = locked_employee_page(monkeypatch, "an")
-    assert "email" not in at.dataframe[0].value.columns or at.dataframe[0].value.empty
-    monkeypatch.delenv("APP_PASSCODE")
-    unlocked = employee_page(monkeypatch, "an")
-    assert "email" in unlocked.dataframe[0].value.columns
-
-
-def test_the_passcode_brings_contact_details_back(monkeypatch):
-    employee = long_career()
-    monkeypatch.setenv("APP_PASSCODE", "test-passcode")
-    at = AppTest.from_file("../views/employee_360.py", default_timeout=180)
-    at.session_state["e360_search"] = employee.employee_code
-    at.session_state["editor"] = True
-    at.run()
-    assert not at.exception, at.exception
-    assert employee.email in " ".join(m.value for m in at.tabs[0].markdown)
+    assert not any("protected" in i.value for i in at.info)
+    assert not any("passcode" in field.label.lower() for field in at.text_input)
 
 
 def test_fact_cards_escape_what_users_typed(monkeypatch):
