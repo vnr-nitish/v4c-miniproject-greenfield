@@ -737,3 +737,10 @@ Performance trends and Attrition risk; Job level and Review cycles on Top perfor
 the cloud database, a first choice takes 1–7 s and Attrition risk is instant, because it slices results in memory.
 
 The year-over-year table is no longer folded away. Whole suite: **317 / 317**.
+
+## Step 32 — The presentation matches the site
+
+Rebuilt on the company template (19 slides): a new architecture slide, and a new table of fact and dimension
+tables with their keys and how they connect. Removed after the user's review: all speaker notes, "why 14 tables",
+the "one row per" column, the counts under the star-schema tables, the timings on the SCD Type 2 slide and the list
+of SQL techniques (that slide now lists what each of the 9 scripts creates). Fresh screenshots of the live site.

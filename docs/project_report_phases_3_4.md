@@ -406,7 +406,7 @@ recent batches with their steps and any rejected rows.
 | Action | OLTP database | Warehouse / dashboards |
 |---|---|---|
 | Onboard an employee | at once | **at once** (warehouse version 1) |
-| Change position · record an exit | at once | **at once** (SCD Type 2 step / leaver flag) |
+| Update a position · record an exit | at once | **at once** (SCD Type 2 step / leaver flag) |
 | Create / close a project, assign, submit a review | at once | after **Run warehouse ETL** — the warehouse is loaded in batches (decision B5) |
 
 ## 17. Testing the web application
