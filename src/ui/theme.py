@@ -32,7 +32,8 @@ html, body, [class*="css"], .stMarkdown { font-family: 'Plus Jakarta Sans', sans
 .tile { padding: 1rem 1.1rem; border-radius: 16px; background: #111A2E; border: 1px solid rgba(148,163,184,.14);
         border-top: 4px solid var(--c); transition: transform .2s ease, box-shadow .2s ease; }
 .tile:hover { transform: translateY(-3px); box-shadow: 0 12px 28px rgba(0,0,0,.35); }
-.tile .label { color: #94A3B8; font-size: .75rem; text-transform: uppercase; letter-spacing: .07em; font-weight: 600; }
+.tile .label { color: #94A3B8; font-size: .75rem; text-transform: uppercase; letter-spacing: .07em; font-weight: 600;
+               line-height: 1.3; min-height: 2.6em; }  /* two lines for every label, so the numbers stay level */
 .tile .value { font-size: 1.75rem; font-weight: 800; color: #F8FAFC; margin-top: .15rem; }
 .delta-up { color: #22C55E; font-size: .82rem; } .delta-down { color: #EF4444; font-size: .82rem; }
 .delta-flat { color: #94A3B8; font-size: .82rem; }
