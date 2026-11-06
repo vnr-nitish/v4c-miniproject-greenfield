@@ -526,7 +526,7 @@ before anyone asks.
 | `tests/test_managers.py` | 51, on the 100K data, ≈ 2 min | Singletons on one pool; the rollback session leaves no trace; a failed step undoes only itself; **a busy pool waits, and fails clearly after the limit; a code taken by a simultaneous hire is retried, other duplicates are not**; reference lists; onboarding (codes, warehouse version 1, invalid hires refused and leaving nothing); **department change = SCD2 step**; promotion reason; Type 1 corrections on every version; exits (assignments closed, attrition flag, no later changes); projects (codes, update, closing ends assignments, over-allocation, invalid assignments, deletion rules, warehouse batch); reviews (submit / duplicate / future / reviewer not employed / withdraw / final once warehoused / form suggestions); analytics checked against **independent SQL**: totals, `LAG` arithmetic, dense ranks without gaps, rank-1 = the best in a direct query, score = sum of its factors, bands and percentiles consistent, back-test monotonic, point-in-time leavers = exits per year, filters respected, cached copies, cache bypass in a session |
 | `tests/test_schema_manager.py` | 6 | the SQL splitter (delimiters, quotes, comments); script selection; **a rebuild over loaded data is refused before anything runs** (the execution step is replaced by one that fails the test); scripts run on the shared pool and a failing statement names its file |
 
-Whole suite: **211 tests pass** (82 from Phases 1–2 + 129 new), ≈ 5 minutes. After the run, a
+Whole suite: **317 tests pass**, about 7 minutes. After the run, a
 fingerprint (row count + checksum) of every OLTP and warehouse table equals the one taken before
 — the tests left nothing behind.
 

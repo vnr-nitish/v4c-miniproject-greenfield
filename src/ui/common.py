@@ -1,14 +1,12 @@
-"""Shared page helpers: header, KPI tiles, fact cards, filters, pop-ups, error display and the editor passcode."""
+"""Shared page helpers: header, KPI tiles, fact cards, page filters, pop-ups and error display."""
 from __future__ import annotations
 
-import hmac
-import os
 from html import escape
 from typing import Any, Callable
 
 import streamlit as st
 
-from src.dal import AnalyticsFilter, AnalyticsManager
+from src.dal import AnalyticsManager
 from src.exceptions import BusinessRuleError, HRAppError, NotFoundError, PoolBusyError, ValidationError
 from src.ui.forms import _manager_candidates
 from src.ui.theme import TILE_COLORS, inject_css
@@ -82,8 +80,17 @@ def data_changed() -> None:
     _manager_candidates.clear()
 
 
-def current_filters() -> AnalyticsFilter:
-    return st.session_state.get("filters", AnalyticsFilter())
+def department_filter(container: Any) -> tuple[str, ...]:
+    """A page's Department drop-down, as AnalyticsFilter wants it: empty means every department."""
+    chosen = container.selectbox("Department", ["All", *AnalyticsManager().filter_options()["departments"]])
+    return () if chosen == "All" else (chosen,)
+
+
+def job_level_filter(container: Any) -> tuple[int, ...]:
+    """A page's Job level drop-down, as AnalyticsFilter wants it: empty means every level."""
+    chosen = container.selectbox("Job level", ["All", *AnalyticsManager().filter_options()["job_levels"]],
+                                 format_func=lambda level: level if level == "All" else f"Level {level}")
+    return () if chosen == "All" else (chosen,)
 
 
 def attempt(action: Callable[[], Any]) -> Any:
@@ -98,38 +105,3 @@ def attempt(action: Callable[[], Any]) -> Any:
     except HRAppError as err:
         st.error(f"The database could not complete this: {err}")
     return None
-
-
-def _configured_passcode() -> str | None:
-    code = os.environ.get("APP_PASSCODE")
-    if code:
-        return code
-    try:
-        return st.secrets.get("APP_PASSCODE")
-    except Exception:                       # no secrets file locally
-        return None
-
-
-def is_unlocked() -> bool:
-    """Has this visitor entered the passcode (or is there none, as in local development)?"""
-    return not _configured_passcode() or bool(st.session_state.get("editor"))
-
-
-def editor_unlocked(place: str = "main") -> bool:
-    """Data entry is protected by a passcode when APP_PASSCODE is configured (the public site).
-    `place` names the spot on the page, so a page can ask in several tabs (each form needs its own key)."""
-    code = _configured_passcode()
-    if not code:
-        st.caption("🔓 Data entry is open — no APP_PASSCODE is configured (local development).")
-        return True
-    if st.session_state.get("editor"):
-        return True
-    st.info("Data entry is protected on the public site; the dashboards are open to everyone.")
-    with st.form(f"unlock_{place}"):
-        entered = st.text_input("Editor passcode", type="password")
-        if st.form_submit_button("Unlock data entry"):
-            if hmac.compare_digest(entered.encode(), code.encode()):
-                st.session_state.editor = True
-                st.rerun()
-            st.error("Wrong passcode.")
-    return False

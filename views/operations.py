@@ -5,7 +5,7 @@ import pandas as pd
 import streamlit as st
 
 from src.dal import AnalyticsManager, EtlManager
-from src.ui.common import attempt, data_changed, editor_unlocked, page_header
+from src.ui.common import attempt, data_changed, page_header
 
 page_header("ETL & data health")
 etl, am = EtlManager(), AnalyticsManager()
@@ -13,20 +13,19 @@ version = attempt(am.data_version)
 if version:
     st.caption(f"Warehouse version: batch {version[0]} · analytics cache entries: {len(am._cache)}")
 
-if editor_unlocked():
-    st.markdown("Loads new reviews and projects into the warehouse (incremental, about 1–3 minutes).")
-    if st.button("Run warehouse ETL", type="primary"):
-        started = time.perf_counter()
-        with st.status("Running hr_dw.sp_run_etl …", expanded=True) as status:
-            batch_id = attempt(etl.run_warehouse_etl)
-            if batch_id:
-                data_changed()
-                for step in etl.batch_steps(batch_id):
-                    st.write(f"✅ {step['step_name']}: {step['rows_affected']:,} rows — {step['message'] or ''}")
-                status.update(label=f"ETL batch {batch_id} finished in {time.perf_counter() - started:.0f} s",
-                              state="complete")
-            else:
-                status.update(label="ETL failed — see the message above", state="error")
+st.markdown("Loads new reviews and projects into the warehouse (incremental, about 1–3 minutes).")
+if st.button("Run warehouse ETL", type="primary"):
+    started = time.perf_counter()
+    with st.status("Running hr_dw.sp_run_etl …", expanded=True) as status:
+        batch_id = attempt(etl.run_warehouse_etl)
+        if batch_id:
+            data_changed()
+            for step in etl.batch_steps(batch_id):
+                st.write(f"✅ {step['step_name']}: {step['rows_affected']:,} rows — {step['message'] or ''}")
+            status.update(label=f"ETL batch {batch_id} finished in {time.perf_counter() - started:.0f} s",
+                          state="complete")
+        else:
+            status.update(label="ETL failed — see the message above", state="error")
 
 st.subheader("Recent batches")
 batches = attempt(lambda: etl.recent_batches(15))

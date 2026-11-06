@@ -2,21 +2,22 @@
 import streamlit as st
 
 from src.dal import AnalyticsFilter, AnalyticsManager
-from src.ui.common import attempt, current_filters, page_header
+from src.ui.common import attempt, job_level_filter, page_header
 
 ROW_HEIGHT = 35
 
 page_header("Top performers")
-am, base = AnalyticsManager(), current_filters()
-cycles = st.session_state.get("cycles") or []
+am = AnalyticsManager()
+cycles = am.filter_options()["fiscal_years"]
 
-c1, c2, c3 = st.columns([3, 1, 1])
-chosen = c1.multiselect("Review cycles", cycles, default=base.fiscal_years or cycles[-3:])
-top_n = c2.number_input("Ranks per department", 1, 20, 5)
+c1, c2, c3, c4 = st.columns([3, 1, 1, 1])
+chosen = c1.multiselect("Review cycles", cycles, default=cycles[-3:])
+levels = job_level_filter(c2)
+top_n = c3.number_input("Ranks per department", 1, 20, 5)
 most_reviews = len(chosen) or len(cycles) or 1             # one review per employee and cycle
-min_reviews = c3.number_input("Minimum reviews", 1, most_reviews, min(2, most_reviews))
+min_reviews = c4.number_input("Minimum reviews", 1, most_reviews, min(2, most_reviews))
 
-filters = AnalyticsFilter(base.departments, base.job_levels, tuple(chosen))
+filters = AnalyticsFilter(job_levels=levels, fiscal_years=tuple(chosen))
 top = attempt(lambda: am.top_performers(filters, top_n=top_n, min_reviews=min_reviews, active_only=True))
 if top is not None and len(top):
     departments = sorted(top.department_name.unique())

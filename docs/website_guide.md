@@ -13,7 +13,7 @@ submit, and how the data travels between the page and the database.
 
 ```
  Browser ──► Streamlit app (Streamlit Community Cloud, Python)
-               app.py         navigation · sidebar filters · health check · background warm-up
+               app.py         navigation · health check · background warm-up
                views/*.py     the pages: widgets and charts only, no SQL
                src/dal/*      managers: the only code that talks to MySQL
                     │
@@ -36,7 +36,7 @@ submit, and how the data travels between the page and the database.
 
 ## 2. Layout and navigation
 
-The left sidebar has four sections and the **Filters**:
+The left sidebar is the page menu, with four sections:
 
 | Section | Pages |
 |---|---|
@@ -45,24 +45,25 @@ The left sidebar has four sections and the **Filters**:
 | Analytics (warehouse) | Performance trends · Top performers · Attrition risk · Project bottlenecks |
 | Operations | ETL & data health |
 
-**Filters** (sidebar) — *Department*, *Job level*, *Review cycle*. Empty = everything. They apply to
-every analytics page at once:
+**Filters** sit in a row under each analytics page's heading. Each starts on *All*, and a choice applies
+to that page only. Each page has only the filters that mean something there:
 
-| Page | Uses |
+| Page | Filters |
 |---|---|
-| Command centre, Attrition risk | department, job level (the current workforce) |
-| Performance trends, Top performers | department, job level, review cycle (department and level *at review time*) |
-| Project bottlenecks | department (the project's owning department) |
+| Command centre | Department |
+| Performance trends | Department, Job level (the department and level *at review time*) |
+| Top performers | Job level, Review cycles (each department has its own tab) |
+| Attrition risk | Department, Job level (the current workforce); the Evidence chart stays company-wide, because it proves the score works overall |
+| Project bottlenecks | Department (the project's owning department) |
 
-**Passcode.** On the public site, data-entry pages and the ETL button are locked until you enter
-the editor passcode (the `APP_PASSCODE` secret); once unlocked, they stay unlocked for your visit.
-Dashboards are open to everyone. Locally (no passcode configured) everything is open.
+**No password.** The whole site is open: anyone with the link can read the dashboards, enter data and
+run the ETL. That was the trainer's request for this project.
 
 ## 3. Command centre (Overview)
 
 The page answers "how is the company doing right now?". Every number is read from the
-**warehouse** (`hr_dw`) through `AnalyticsManager.overview()`, and every one follows the sidebar
-filters. Numbers below are from the live site on 30 October 2026.
+**warehouse** (`hr_dw`) through `AnalyticsManager.overview()`, and every one follows the Department
+filter above them. Numbers below are from the live site on 30 October 2026.
 
 ### How to read the arrows
 
@@ -200,26 +201,33 @@ experience and number of previous employers.
    and the first job version "Hire") and `sp_scd2_apply_employee` (the first `dim_employee`
    row in the warehouse). If someone else took the same code at the same moment, it retries
    with the next code.
-3. On success: a green message with the new code, **balloons**, and the new warehouse row.
+3. On success: a **pop-up** with the new code and the new warehouse row. Pressing **OK** closes it
+   and leaves an empty form for the next person.
 
-**Balloons appear only here, and only after a successful hire.** They do not appear when the form
-shows a warning (nothing was saved), and no other page uses them — they mark the one moment a new
-person enters the company.
+**The pop-up appears only after a successful hire.** When the form shows a warning, nothing was
+saved and what you typed stays in the form, so you can correct it.
 
 ## 5. Employee 360 · job change
 
-**Find someone:** type an employee code, or click one of the **example** chips (active employees
-with the longest history). The header shows department, role and level, income, tenure and the
-number of SCD Type 2 versions.
+**Find someone:** type a name, an e-mail, a phone number or an employee ID (any part of a name,
+e-mail or phone number will do), or click one of the **example** chips (active employees with the
+longest history). People who left are found too. One match, or one exact match, opens straight
+away; several matches are listed, and clicking a row opens that person. The made-up data has about
+5,000 different phone numbers for 100,000 people, so a phone search usually lists about 20 people.
 
-**Tab "Career timeline":** one bar per job version on a time axis, coloured by department, plus
-the version table straight from the warehouse (`dim_employee`: version number, department,
-role, level, income, change reason, start and end dates, current flag).
+**Tab "Details":** the current position, employment, contact and personal details, and background.
 
-**Tab "Change position"** (the Phase 4 SCD Type 2 requirement):
-- The same position picker as onboarding, pre-filled with the current job. You can change the
-  **department** (only roles that department offers become selectable), **role**, **level**,
-  **monthly income**, **manager**, **stock options** and **travel**.
+**Tab "Career timeline":** the version table straight from the warehouse (`dim_employee`: version
+number, department, role, level, income, change reason, start and end dates, current flag).
+
+**Tab "Update", part "Personal details":** correct the name, contact details, gender, date of birth,
+marital status, education, distance from home and prior experience (SCD Type 1: the warehouse
+overwrites them on every version). The hire date and exit have their own rules and are not here.
+
+**Tab "Update", part "Position"** (the Phase 4 SCD Type 2 requirement):
+- The same position picker as onboarding, pre-filled with the current job, so a field you don't
+  touch stays as it is. You can change the **department** (only roles that department offers become
+  selectable), **role**, **level**, **monthly income**, **manager**, **stock options** and **travel**.
 - **Effective date:** today or earlier, after the current version started; at most one change per
   employee per day. **Reason:** pick one or leave "Derive automatically" — then Promotion (level up) >
   Transfer (department) > Role Change > Manager Change > Salary Revision.
@@ -232,23 +240,26 @@ role, level, income, change reason, start and end dates, current flag).
   - Warehouse (`sp_scd2_apply_employee`): the current `dim_employee` row is **expired**
     (end date = the day before, `is_current = 0`) and a **new current row** is inserted (start =
     effective date, end 9999-12-31, version number + 1).
-  - The page shows the **expired** row (red) and the **new** row (green) side by side, and the
-    timeline with the new bar.
+  - A pop-up shows the **expired** row and the **new** row. OK closes it, and the page shows the new
+    position.
 - **What you get afterwards:** reviews from the effective date on link to the new version (earlier
   reviews keep the old one, so history stays true); department analytics count the person in the
   new department from that day; the attrition-risk score reflects the new level, pay or stock on
   the dashboards' next refresh (immediately, because the page tells the analytics cache).
 
-**Tab "Reviews · projects · exit":** the person's reviews and project assignments; **Record an
-exit** (date and reason) — `sp_record_exit` ends their open assignments and the warehouse marks
-every version as a leaver (attrition flag, exit date). People who left cannot change jobs.
+**Tab "Reviews & projects":** the person's reviews and project assignments, to read.
+
+**Tab "Exit":** record the exit date and reason — `sp_record_exit` ends their open assignments and
+the warehouse marks every version as a leaver (attrition flag, exit date). People who left cannot
+change anything; this tab then shows when and why they left.
 
 ## 6. Projects
 
 | Tab | What you can do | Rules / result |
 |---|---|---|
-| Browse & close | Search by code or name, filter by status; click a row to see the team; close an open project as Completed or Cancelled with its actual end date | Closing ends the open assignments on that date |
-| Create | Owning department, project manager (level 3+ of that department), name, start and planned end, budget, priority, status (Planned / Active), description | The next code `PRJ0…` is generated by the database (retried if taken); planned end ≥ start |
+| Dashboard | All projects at a glance: search by code or name, filter by status | Read only |
+| Project details | Type a project code (`PRJ00718`, `prj718` and `718` all work) and press **Submit**: details, team, **edit** (name, manager, status, priority, planned end, budget, description) or **close** as Completed or Cancelled. Enter another code and Submit to switch project | Closing ends the open assignments on that date. A closed project can no longer change |
+| Create | All in one box: name, owning department, project manager (level 3+ of that department), priority, start and planned end, budget, status (Planned / Active), description | The next code `PRJ0…` is generated by the database (retried if taken); planned end ≥ start |
 | Assign people | Active project, employee code, project role, allocation (5–100 %), start date, "assign even if above 100 %" | Refused: closed project, start before the project, person not employed on that date. If the person's total allocation would pass 100 %, a warning names both numbers — tick the box to assign anyway |
 
 New projects reach the warehouse (and the bottleneck page) on the next ETL run (§12).
@@ -268,42 +279,41 @@ at once and reach the dashboards after the next ETL run.
 ## 8. The analytics pages (all read the warehouse)
 
 ### Performance trends
-- **Metric** buttons (KPI, rating, outstanding %, overtime %, job satisfaction, training) and
-  **Compare departments** (one line per department).
-- Tiles: the latest cycle with the change against the previous one; the **Year-over-year table**
-  (expander) shows the `LAG()` columns.
-- **Heatmap** job role × review cycle for a chosen metric — where the real movement is (e.g.
-  overtime per role). Ratings and KPI are steady by design: no trend was invented.
+- Tiles first: the latest cycle with the change against the previous one.
+- **Metric** buttons (KPI, rating, outstanding %, overtime %, job satisfaction, training) above the
+  graph, and **Compare departments** (one line per department; it shows only when Department is *All*).
+- The **year-over-year table** below the graph shows the `LAG()` columns. Ratings and KPI are steady by
+  design: no trend was invented.
 
 ### Top performers
-- Controls: review cycles (default the last three), ranks per department (1–20), minimum number of
-  reviews, current staff only.
-- **Medal cards** 🥇🥈🥉 per department (with "+N tied" when people share a rank), a **leaderboard
-  chart**, and a table per department with the rank, "sharing rank" and ranked-employee count.
+- Controls: review cycles (default the last three), job level, and +/- boxes for ranks per department
+  (1–20) and the minimum number of reviews. Only current staff are shown.
+- **One tab per department**, each with a table of its top ranks. People with exactly the same result
+  share a rank, so a tab can show more rows than the number chosen.
 - The ranking is `DENSE_RANK() OVER (PARTITION BY department ORDER BY avg rating DESC, avg KPI DESC)`
-  computed at query time, so it follows the filters; the SQL is shown on the page.
+  computed at query time, so it follows the controls.
 
 ### Attrition risk
-- **Heatmap** job level × years at the company: % of employees at High / Very high risk (red =
-  concentrated risk; cells with fewer than 30 people are blank).
-- **Bands per department** and **factor prevalence** (which factors the at-risk people share).
-- **Who is at risk:** choose the minimum band; **click a row** to open a dialog explaining that
-  person's score and factors.
-- **Evidence:** the back-test bars (share of people who actually left within a year, per band) and
-  **attrition per fiscal year** (point-in-time headcounts through SCD Type 2).
+- Three charts in one row: **bands per department**, **factor prevalence** (which factors the at-risk
+  people share) and the **evidence**: the back-test bars (share of people who actually left within a
+  year, per band).
+- **Who is at risk:** choose the minimum band; click **View** in a row to open a pop-up explaining that
+  person's score and factors. Only the table redraws, so it opens in about a second.
 - The score: 11 work-related factors, 0–14 points; bands Low 0–2, Medium 3–5, High 6–7, Very high 8+;
   marital status, age and gender are deliberately not used.
 
 ### Project bottlenecks
-- **Bubble chart** of overdue open projects: days overdue × team overtime, bubble = budget, colour
-  = priority; top right = the real bottlenecks. The table below lists them with a days-overdue bar.
-- **Completed projects:** % finished late and the average delay, grouped by priority, budget band,
-  department or year.
+- Tab **Overdue projects:** a bubble chart of overdue open projects: days overdue × team overtime,
+  bubble = budget, colour = priority; the top right needs attention first. The table below lists them
+  with a days-overdue bar.
+- Tab **Completed projects:** % finished late and the average delay when late, grouped by priority,
+  budget band, department or year. The delay is an average, shown in whole days: for example, Medium
+  priority is 14,290 late days ÷ 244 late projects = 59 days.
 
 ## 9. ETL & data health (Operations)
 
 - The **warehouse version** (latest finished ETL batch) and the number of cached results.
-- **Run warehouse ETL** (passcode): runs `hr_dw.sp_run_etl` — dimensions first, then the fact,
+- **Run warehouse ETL:** runs `hr_dw.sp_run_etl` — dimensions first, then the fact,
   SCD Type 2 included — and lists every step with its row count. This is what makes new reviews
   and projects appear on the dashboards.
 - **Recent batches:** click one to see its steps and any rejected rows with the reason.
@@ -323,15 +333,16 @@ at once and reach the dashboards after the next ETL run.
 | Dashboard results | until the warehouse changes | `AnalyticsManager` cache, keyed by the warehouse version |
 | The warehouse version itself | 60 s, or until this app changes the warehouse | asking costs a 0.45 s round trip to the cloud; cached results now return in under 1 ms instead of ~0.45 s each |
 | Drop-down lists (departments, roles, levels, education, exit reasons) | the app's lifetime | reference data hardly changes |
-| Manager choices · example employees | 5 min · 1 hour | each is a query over 100,000 employees (~2 s / ~1 s) |
-| Company-wide risk score | computed once in the background when the app starts | ~20 s on the first visit after a data change |
+| Manager choices | 1 hour, or until people join, move or leave | each is a query over 100,000 employees (~2 s) |
+| Each page's default results | saved in the database and read back when the app starts | seconds after a wake-up instead of minutes; a background thread keeps them current |
+| A filter choice | until the warehouse changes | the first time takes a few seconds on most pages; Attrition risk is instant |
 
 ## 12. Questions you may be asked
 
 **Why 83,878 and not 100,000 on the headcount tile?** The tile counts active employees; 16,122 left
 (the IBM attrition rate) and are kept for history.
 
-**Where is SCD Type 2 visible?** Employee 360 → Change position shows the expired and the new
+**Where is SCD Type 2 visible?** Employee 360 → Update → Position shows the expired and the new
 warehouse row; the career timeline shows every version.
 
 **Why does a new review not show on the dashboards at once?** The warehouse is loaded in batches;
@@ -341,5 +352,297 @@ on the day.
 **What if two people onboard at the same moment?** Both get a valid code: the database refuses the
 duplicate and the app retries with the next one.
 
-**Is the data safe on the public site?** Writes need the editor passcode; credentials live only in
-Streamlit secrets; every value is a bound SQL parameter.
+**Is the site open to everyone?** Yes, by the trainer's request: there is no password, so anyone with
+the link can read and change the data. Every entry is still validated, database credentials live only
+in Streamlit secrets, and every value is a bound SQL parameter.
+
+## 13. The data: from 1,470 IBM rows to 100,000 employees
+
+### 13.1 The source: IBM HR Analytics Employee Attrition & Performance
+
+One CSV file (`data/raw/WA_Fn-UseC_-HR-Employee-Attrition.csv`): **1,470 rows, one per employee, 35
+columns**. It's a single **snapshot**, with no dates and no history.
+
+How to read the 1–4 scales:
+- **Satisfaction and involvement:** 1 Low · 2 Medium · 3 High · 4 Very high.
+- **Work-life balance:** 1 Bad · 2 Good · 3 Better · 4 Best.
+- **Performance rating:** 1 Low · 2 Good · 3 Excellent · 4 Outstanding.
+- **Education** (1–5): 1 Below college · 2 College · 3 Bachelor · 4 Master · 5 Doctor.
+
+| Column | Values in the file | Meaning | Where it went in this project |
+|---|---|---|---|
+| Age | 18 – 60 (median 36) | age at the snapshot | date of birth (±1 year variation) |
+| Attrition | No 1,233 · Yes 237 (16.1 %) | has the person left? | exit date and exit reason (Yes → left between 2019 and June 2026) |
+| BusinessTravel | Travel_Rarely 1,043 · Travel_Frequently 277 · Non-Travel 150 | how often they travel | job version (`business_travel`) |
+| DailyRate | 102 – 1,499 | a pay rate unrelated to income (noise) | kept in staging only |
+| Department | R&D 961 · Sales 446 · Human Resources 63 | department | `departments`, job version |
+| DistanceFromHome | 1 – 29 km | commute distance | `employees.distance_from_home_km` (±2 km) |
+| Education | 1 – 5 | education level | `education_levels` |
+| EducationField | Life Sciences 606 · Medical 464 · Marketing 159 · Technical Degree 132 · Other 82 · Human Resources 27 | field of study | `education_fields` |
+| EmployeeCount | always 1 | constant | dropped (no information) |
+| EmployeeNumber | 1 – 2,068 | IBM's id | `source_employee_number` in staging: which IBM row a synthetic employee was modelled on; new codes are EMP000001… |
+| EnvironmentSatisfaction | 1 – 4 | survey answer | `employee_surveys` (latest survey = IBM value) |
+| Gender | Male 882 · Female 588 | gender | `employees.gender` |
+| HourlyRate | 30 – 100 | noise | staging only |
+| JobInvolvement | 1 – 4 | survey answer | `employee_surveys` |
+| JobLevel | 1 – 5 (median 2) | seniority | job version (`job_levels`; each level has a salary band) |
+| JobRole | 9 roles (Sales Executive 326 … Human Resources 52) | role | `job_roles`, job version |
+| JobSatisfaction | 1 – 4 | survey answer | `employee_surveys` |
+| MaritalStatus | Married 673 · Single 470 · Divorced 327 | marital status | `employees` (deliberately **not** used in the risk score) |
+| MonthlyIncome | 1,009 – 19,999 (median 4,919) | monthly pay | job version (±7 %, kept inside the level's band) |
+| MonthlyRate | 2,094 – 26,999 | noise | staging only |
+| NumCompaniesWorked | 0 – 9 | previous employers | `prior_companies_count` (corrected by rule D19 in the ETL: 16,500 values) |
+| Over18 | always Y | constant | dropped |
+| OverTime | No 1,054 · Yes 416 | works overtime | review `overtime_flag` (latest review = IBM value) |
+| PercentSalaryHike | 11 – 25 % | last pay rise | the last pay change in the job history (92 % within 1 point) |
+| PerformanceRating | **only 3 and 4** | last rating | latest review = IBM value |
+| RelationshipSatisfaction | 1 – 4 | survey answer | `employee_surveys` |
+| StandardHours | always 80 | constant | dropped |
+| StockOptionLevel | 0 – 3 | stock options | job version |
+| TotalWorkingYears | 0 – 40 | whole career | prior experience = TotalWorkingYears − YearsAtCompany |
+| TrainingTimesLastYear | 0 – 6 | trainings last year | review `training_sessions` (latest = IBM value) |
+| WorkLifeBalance | 1 – 4 | survey answer | `employee_surveys` |
+| YearsAtCompany | 0 – 40 (median 5) | tenure | **hire date** = snapshot (or exit) − years |
+| YearsInCurrentRole | 0 – 18 | time in role | date of the **last role change** |
+| YearsSinceLastPromotion | 0 – 15 (median 1) | time since promotion | date of the **last promotion** |
+| YearsWithCurrManager | 0 – 17 | time with manager | date of the **last manager change** |
+
+The last four columns are what make history possible: they say *when* things happened, so the job
+history is built backwards from them (§13.2). Rebuilding the IBM columns from the database gives
+back the original values: 100 % for tenure, role, promotion and level, and 98 % for years with the
+manager.
+
+### 13.2 What the synthesizer generates (`src/synthesizer`, seed 42, snapshot 30 June 2026)
+
+| Generated table (staging) | Rows | How |
+|---|---:|---|
+| `stg_employees` | 100,000 (+500 planted duplicates) | **Stratified sampling** of the IBM rows: each group of (attrition, department, role, level) gets its exact share of the 100,000, so the mix matches IBM. Small variations ("jitter") make every person unique: income ±7 % (inside the level's band), age ±1, distance ±2 km. Faker creates new identities: Indian names, `example.com` e-mails, phone numbers. The hire date comes from YearsAtCompany, and leavers get an exit date between 2019 and June 2026 |
+| `stg_job_history` | 308,986 versions | Built **backwards** from today's job using the IBM dates: last promotion, last role change, last manager change. 10 % of people get a department transfer, and long careers get earlier promotions. Pay changes follow PercentSalaryHike. Versions per person: 1 → 8,594 people · 2 → 21,095 · 3 → 30,175 · 4 → 34,579 · 5+ → 5,557 |
+| `stg_surveys` | 468,646 | One engagement survey per person per year (September–October, 2019–2025) while employed. The **latest** survey holds the IBM answers; earlier years step back with small changes, keeping the IBM mix every year |
+| `stg_reviews` | 463,015 (+1,389 planted resubmissions) | One review per person per year, held 15 Jan – 15 Mar of the next year, for people who **joined by 30 September** and are still employed on the review date. The latest review holds the IBM rating, overtime and training; earlier years step back the same way. The KPI comes from the rating (§14, question 5). Reviewer = the manager on the review date; project = the person's main project that year |
+| `stg_projects` | 2,000 | Split over departments by headcount, with Faker names. Managers are level-3+ staff of the department. About 40 % of finished projects end late, by 1–120 days |
+| `stg_assignments` | 503,240 | Each employment year, 92 % of people are on a project and 25 % of those also on a second one. Allocations are 20–100 %; about 5 % are allowed above 100 % (bottlenecks) |
+
+**Planted data-quality problems.** A real source system is never clean, and the problem statement
+asks the ETL to clean data. So the synthesizer deliberately adds problems and records each one in a
+manifest. The ETL must fix every one, and a test checks the counts:
+
+| Problem planted in staging | Count | Fixed by the ETL with |
+|---|---:|---|
+| The same employee sent twice | 500 | `ROW_NUMBER()` per employee code, newest kept |
+| Gender written as "M" / "F" | 1,027 | `CASE` → Male / Female |
+| Department / role labels with wrong case, extra spaces or aliases ("R&D", "HR", "Sales Dept") | 6,172 job versions · 2,011 employees | `TRIM` + case-insensitive match + alias map |
+| A review sent again with a corrected KPI ("resubmission") | 1,389 | `ROW_NUMBER()` per employee and year, latest kept |
+
+### 13.4 Reference data and the organisation structure
+
+**Departments (3)**
+
+| Code | Department | Active employees |
+|---|---|---:|
+| HR | Human Resources | 3,469 |
+| RND | Research & Development | 56,328 |
+| SAL | Sales | 24,081 |
+
+**Job levels (5): each level has a salary band (monthly income)**
+
+| Level | Title | Salary band |
+|---|---|---|
+| 1 | Entry | 1,000 – 5,000 |
+| 2 | Intermediate | 2,000 – 10,000 |
+| 3 | Senior | 5,000 – 14,000 |
+| 4 | Lead | 11,000 – 18,000 |
+| 5 | Executive | 18,000 – 20,000 |
+
+**Job roles (9): which department offers each one, and which levels it allows**
+
+| Role | Department(s) | Allowed levels |
+|---|---|---|
+| Human Resources | Human Resources | 1 – 3 |
+| Laboratory Technician | Research & Development | 1 – 3 |
+| Research Scientist | Research & Development | 1 – 3 |
+| Healthcare Representative | Research & Development | 2 – 4 |
+| Manufacturing Director | Research & Development | 2 – 4 |
+| Research Director | Research & Development | 3 – 5 |
+| Sales Representative | Sales | 1 – 2 |
+| Sales Executive | Sales | 2 – 4 |
+| Manager | all three departments | 3 – 5 |
+
+These rules are enforced everywhere. The forms offer only valid choices, and the database procedure
+`sp_validate_position` refuses anything else:
+- a role must be offered by the department;
+- the level must be inside the role's range;
+- the pay must be inside the level's band;
+- the manager must be an active employee.
+
+**Active employees by department and level**
+
+| Department | L1 | L2 | L3 | L4 | L5 |
+|---|---:|---:|---:|---:|---:|
+| Human Resources | 1,565 | 884 | 272 | 272 | 476 |
+| Research & Development | 22,653 | 18,096 | 7,891 | 4,558 | 3,130 |
+| Sales | 2,993 | 13,809 | 4,490 | 2,041 | 748 |
+
+**Who reports to whom (the org chart)**
+- Every employee reports to a manager **in the same department at a higher level**: a level-1
+  employee may report to a level-2, 3, 4 or 5 manager.
+- **Level-5 executives** report to their **department head**, also level 5. That's the only case of
+  equal levels (4,119 people).
+- **Department heads have no manager.**
+- About **1 %** of active employees (822) have no recorded manager. Their job version dates from the
+  company's early years, when no senior colleague was employed for the whole period. Rather than
+  invent an invalid manager, it's left empty, and their reviews go to the department head.
+- A manager changes only at a **manager change** or a **transfer**. The **reviewer** of a review is
+  the person's manager on the review date.
+
+| Employee level | Manager level 2 | 3 | 4 | 5 |
+|---|---:|---:|---:|---:|
+| 1 | 11,934 | 7,568 | 4,573 | 3,136 |
+| 2 | — | 12,356 | 13,273 | 7,160 |
+| 3 | — | — | 5,890 | 6,763 |
+| 4 | — | — | — | 6,284 |
+| 5 | — | — | — | 4,119 |
+
+**Other reference lists**
+- **Education levels:** 1 Below College · 2 College · 3 Bachelor · 4 Master · 5 Doctor.
+- **Education fields:** Human Resources · Life Sciences · Marketing · Medical · Other · Technical Degree.
+- **Exit reasons:**
+  - *Voluntary:* Better Opportunity · Career Change · Compensation · Relocation · Retirement ·
+    Work-Life Balance.
+  - *Involuntary:* Contract End · Layoff / Restructuring · Performance Termination.
+- **Performance ratings and the pay rise each one allows:**
+
+  | Rating | Pay rise range |
+  |---|---|
+  | 1 Low | 0–4 % |
+  | 2 Good | 5–10 % |
+  | 3 Excellent | 11–19 % |
+  | 4 Outstanding | 20–25 % |
+
+- **Job changes in the history** (308,986 versions): Hire 100,000 · Promotion 96,519 ·
+  Role Change 57,723 · Manager Change 45,479 · Transfer 9,265.
+- **Projects by status** (2,000): Completed 1,563 · Active 252 · Cancelled 105 · Planned 53 · On Hold 27.
+
+### 13.3 From staging to the dashboards
+
+1. **`hr_staging`** holds the raw data: 1.85 million rows.
+2. **`sp_migrate_from_staging`** cleans it, removes duplicates and splits it into the normalized
+   **`hr_oltp`** (14 tables).
+3. **`sp_run_etl`** loads the star schema **`hr_dw`**: first the dimensions, with SCD Type 2 history,
+   then the review fact.
+
+The website's forms work on `hr_oltp`; its dashboards read `hr_dw`.
+
+## 14. Your questions answered
+
+**1. Why does Active headcount show 83,880 and not 100,000?**
+100,000 people have *ever* been employed. 16,122 of them (16.1 %, the IBM attrition rate) left
+between January 2019 and June 2026. They stay in the database because their reviews and job history
+are still needed.
+- Active headcount = employees with no exit date.
+- It grows by one with every hire made on the site (83,878 → 83,880 after two test hires).
+
+**2. Why does the latest review cycle have 83,188 reviews when 83,880 people are active?**
+They count different people:
+
+| | People |
+|---|---:|
+| Active today **and** reviewed for 2025 | 82,421 |
+| + reviewed for 2025, **left afterwards** (April – June 2026) | 767 |
+| = reviews in cycle FY2025-26 | **83,188** |
+| Active today **and** reviewed for 2025 | 82,421 |
+| + active, **hired on or after 1 October 2025**: too new for the 2025 review | 1,459 |
+| = active headcount | **83,880** |
+
+The rule: an employee is reviewed for a year only if they joined by **30 September** of that year
+(at least a quarter of the year to judge), and are still employed on the review date. New joiners get
+their first review in the next cycle.
+
+**3. What is a review cycle?**
+Once a year, everyone is reviewed for the previous year: performance year 2025 is reviewed between
+15 January and 15 March 2026. Those dates fall in India's fiscal year FY2025-26 (April 2025 – March
+2026), so the cycle is called FY2025-26. There are seven: FY2019-20 to FY2025-26.
+
+**4. Can a rating be 4.5? How is the average rating 3.155?**
+No. A single review's rating is always a whole number: 1 Low, 2 Good, 3 Excellent, 4 Outstanding.
+Only averages have decimals. Like IBM's data, the generated reviews use only 3 and 4, so the average
+is 3 + the share of 4s: 3 + 0.155 = **3.155**.
+
+**5. How is the KPI score produced? Is it just a random number?**
+For reviews entered on the site, the reviewer types it. For the generated reviews (the IBM data has
+no KPI), it's drawn at random, but **from a range chosen by the review's rating, the only factor
+used**:
+
+| Rating | KPI centred on | Typical spread | Always between |
+|---|---:|---:|---|
+| 4 · Outstanding | 92 | ± 4 | 85 – 100 |
+| 3 · Excellent | 78 | ± 7 | 60 – 95 |
+| 2 · Good | 60 | ± 7 | 40 – 75 |
+| 1 · Low | 42 | ± 7 | 20 – 60 |
+
+- **"Centred on 92 with spread ± 4"** means most Outstanding reviews score between 88 and 96, with
+  fewer further out.
+- **Out-of-range values** are drawn again rather than cut off, so scores don't pile up at 100.
+- **Example:** three Outstanding reviews might get 91.37, 95.02 and 88.64.
+- **Nothing else counts:** tenure, department and pay play no part. So KPI agrees with the rating
+  without being a copy of it.
+- **The cycle's average (80.12)** follows from this. 84.5 % of reviews are 3s (≈ 78) and 15.5 % are
+  4s (≈ 92), so 0.845 × 78 + 0.155 × 92 ≈ 80.
+
+**6. What are the "corrected resubmissions", and why are some KPIs outside their range?**
+In real HR systems a manager sometimes submits a review, then corrects it and submits it again, so
+the source data contains the same review twice. The synthesizer imitates this on purpose for 1,389
+reviews (0.3 %): it adds a **second copy** of the review in staging, with the KPI changed by a small
+random amount (typically ± 3 points). A real example from the data, employee **EMP000022**, review
+of 2019, rating 3:
+
+| Staging row | KPI | |
+|---|---:|---|
+| 7 (first submission) | 85.07 | dropped by the ETL |
+| 463,016 (resubmission) | **89.64** | **kept**: the latest submission wins |
+
+- The ETL keeps exactly one review per employee and year, the latest, using `ROW_NUMBER()`.
+- The correction is applied after the KPI was drawn, so it can push a score slightly past its
+  rating's range. **24** of the 463,015 reviews lie just outside it: 15 Outstanding reviews between
+  79.66 and 84.23 (range 85–100), and 9 Excellent ones at 59.15 or up to 97.37 (range 60–95).
+- That's realistic (a corrected value) and documented, not an error.
+
+**7. How is attrition 2.59 % calculated, and what does ▼ -0.08 mean?**
+Leavers in fiscal year FY2025-26 ÷ average headcount × 100 = 2,153 ÷ ((82,632 + 83,835) ÷ 2) =
+**2.59 %**. The year before it was 2.67 %, so it fell by 0.08 points. Fewer people left, so it's
+shown in green.
+
+**8. What are the attrition-risk bands in the donut?**
+Each active employee gets 0–14 points from 11 work-related warning signs:
+- **2 points each:** overtime, entry level, no stock options.
+- **1 point each:** under 2 years at the company, low environment satisfaction, low job
+  satisfaction, poor work-life balance, low involvement, frequent travel, more than 10 km from home,
+  pay in the lower half of the level.
+
+The bands:
+
+| Band | Score | Share of active employees |
+|---|---|---:|
+| Low | 0–2 | 31.8 % |
+| Medium | 3–5 | 55.6 % |
+| High | 6–7 | 11.5 % |
+| Very high | 8+ | 1.09 % |
+
+Tested on history: 0.7 % of Low and 19.5 % of Very high employees left within a year. The High and
+Very high bands hold 19 % of employees but 63 % of the leavers. Marital status, age and gender are
+deliberately not used.
+
+**9. Why does the number of overdue projects grow without anyone doing anything?**
+Overdue means open with a planned end date before **today**. Every day, an open project whose
+planned end was yesterday becomes overdue (87 → 89 in a few days). The number falls when projects
+are closed.
+
+**10. When does the onboarding pop-up appear?**
+Only after an employee is onboarded successfully. Never after a warning (nothing was saved). OK
+closes it and leaves an empty form.
+
+**11. Why was the first visit slow, and switching pages slow?**
+- **The first visit** after the app starts computes the company-wide risk score on the small cloud
+  server. That takes about 20 s, once.
+- **Page switches** used to ask the database "has anything changed?" 3–5 times per page, at 0.45 s
+  each. That answer is now reused for a minute, so cached pages open in well under a second.

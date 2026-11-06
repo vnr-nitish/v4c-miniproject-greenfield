@@ -8,7 +8,7 @@ from src.dal import EmployeeManager, ProjectManager, ReferenceDataManager
 from src.exceptions import OverAllocationError
 from src.models import Assignment, Project
 from src.models.project import PRIORITIES
-from src.ui.common import announce, attempt, editor_unlocked, fact_cards, page_header, show_announcement
+from src.ui.common import announce, attempt, fact_cards, page_header, show_announcement
 from src.ui.forms import _choice, _manager_candidates
 
 page_header("Projects")
@@ -113,7 +113,7 @@ def details_tab() -> None:
                                 "allocation_pct": "Allocation (%)", "start_date": "From", "end_date": "To"})
     if project.is_closed:
         st.info(f"This project was closed on {project.actual_end_date}, so it can no longer change.")
-    elif editor_unlocked("update"):
+    else:
         action = st.segmented_control("What do you want to do?", ["Edit details", "Close project"], default="Edit details",
                                       required=True, key=f"project_action_{project.project_id}")
         if action == "Edit details":
@@ -125,8 +125,6 @@ def details_tab() -> None:
 @st.fragment
 def create_tab() -> None:
     """All the fields in one box. Not a st.form: the owning department narrows the project managers."""
-    if not editor_unlocked("create"):
-        return
     # Every field's key carries this number: a new number means new, empty fields
     number = st.session_state.setdefault("create_project_number", 0)
     departments = ref.departments()
@@ -161,8 +159,6 @@ def create_tab() -> None:
 
 
 def assign_tab() -> None:
-    if not editor_unlocked("assign"):
-        return
     open_projects = attempt(lambda: pm.search(status="Active", limit=500))
     if open_projects is None or not len(open_projects):
         return

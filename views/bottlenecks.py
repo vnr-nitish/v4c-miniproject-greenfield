@@ -1,16 +1,18 @@
 """Project bottlenecks: overdue projects, and how often and how late completed projects finished."""
 import streamlit as st
 
-from src.dal import AnalyticsManager
+from src.dal import AnalyticsFilter, AnalyticsManager
 from src.models.project import PRIORITIES
 from src.ui import charts
-from src.ui.common import attempt, current_filters, note, page_header
+from src.ui.common import attempt, department_filter, note, page_header
 
 GROUPS = {"priority": "Priority", "budget_band": "Budget band", "department": "Department", "year": "Year"}
 ORDER = {"priority": list(PRIORITIES), "budget_band": ["<250K", "250K-1M", "1M-3M", "3M+"]}
 
 page_header("Project bottlenecks")
-am, filters = AnalyticsManager(), current_filters()
+am = AnalyticsManager()
+filter_column, _ = st.columns([1, 3])
+filters = AnalyticsFilter(department_filter(filter_column))
 tab_overdue, tab_completed = st.tabs(["Overdue projects", "Completed projects"])
 
 with tab_overdue:

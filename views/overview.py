@@ -2,13 +2,14 @@
 import pandas as pd
 import streamlit as st
 
-from src.dal import AnalyticsManager
+from src.dal import AnalyticsFilter, AnalyticsManager
 from src.ui import charts, theme
-from src.ui.common import attempt, current_filters, page_header, tiles
+from src.ui.common import attempt, department_filter, page_header, tiles
 
 page_header("HR Analytics Command Centre")
 am = AnalyticsManager()
-filters = current_filters()
+filter_column, _ = st.columns([1, 3])
+filters = AnalyticsFilter(department_filter(filter_column))
 
 with st.spinner("Reading the warehouse…"):
     overview = attempt(lambda: am.overview(filters))
