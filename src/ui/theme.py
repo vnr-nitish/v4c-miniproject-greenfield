@@ -14,7 +14,6 @@ DEPARTMENT_COLORS = {"Human Resources": "#EC4899", "Research & Development": "#6
 BAND_COLORS = {"Low": "#22C55E", "Medium": "#3B82F6", "High": "#F59E0B", "Very high": "#EF4444"}
 PRIORITY_COLORS = {"Low": "#22C55E", "Medium": "#3B82F6", "High": "#F59E0B", "Critical": "#EF4444"}
 RISK_SCALE = ["#22C55E", "#FACC15", "#F97316", "#EF4444"]
-SEQ_SCALE = ["#1E293B", "#3B82F6", "#14B8A6", "#FACC15"]
 TILE_COLORS = ["#6366F1", "#14B8A6", "#F59E0B", "#EC4899", "#3B82F6", "#84CC16", "#F97316"]
 TEXT, MUTED, GRID = "#E5E7EB", "#94A3B8", "rgba(148,163,184,0.16)"
 

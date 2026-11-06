@@ -19,13 +19,15 @@ min_reviews = c3.number_input("Minimum reviews", 1, most_reviews, min(2, most_re
 filters = AnalyticsFilter(base.departments, base.job_levels, tuple(chosen))
 top = attempt(lambda: am.top_performers(filters, top_n=top_n, min_reviews=min_reviews, active_only=True))
 if top is not None and len(top):
-    st.dataframe(top[["department_name", "department_rank", "employee_code", "full_name", "current_role", "job_level",
-                      "reviews", "avg_rating", "avg_kpi"]],
-                 hide_index=True, width="stretch", height=ROW_HEIGHT * (len(top) + 1) + 3,
-                 column_config={"department_name": "Department",
-                                "department_rank": st.column_config.NumberColumn("Rank", format="#%d"),
-                                "employee_code": "Employee ID", "full_name": "Name", "current_role": "Job role",
-                                "job_level": "Level", "reviews": "Reviews", "avg_rating": "Avg rating",
-                                "avg_kpi": st.column_config.NumberColumn("Avg KPI", format="%.2f")})
+    departments = sorted(top.department_name.unique())
+    for tab, department in zip(st.tabs(departments), departments):
+        rows = top[top.department_name == department]
+        tab.dataframe(rows[["department_rank", "employee_code", "full_name", "current_role", "job_level", "reviews",
+                            "avg_rating", "avg_kpi"]],
+                      hide_index=True, width="stretch", height=ROW_HEIGHT * (len(rows) + 1) + 3,
+                      column_config={"department_rank": st.column_config.NumberColumn("Rank", format="#%d"),
+                                     "employee_code": "Employee ID", "full_name": "Name", "current_role": "Job role",
+                                     "job_level": "Level", "reviews": "Reviews", "avg_rating": "Avg rating",
+                                     "avg_kpi": st.column_config.NumberColumn("Avg KPI", format="%.2f")})
 elif top is not None:
     st.info("No employees match these filters.")
