@@ -110,6 +110,11 @@ def _configured_passcode() -> str | None:
         return None
 
 
+def is_unlocked() -> bool:
+    """Has this visitor entered the passcode (or is there none, as in local development)?"""
+    return not _configured_passcode() or bool(st.session_state.get("editor"))
+
+
 def editor_unlocked(place: str = "main") -> bool:
     """Data entry is protected by a passcode when APP_PASSCODE is configured (the public site).
     `place` names the spot on the page, so a page can ask in several tabs (each form needs its own key)."""

@@ -407,12 +407,80 @@ def test_trends_has_one_chart_and_no_heatmap(monkeypatch):
     assert len(at.dataframe) == 1 and not at.get("pills")
 
 
-def test_top_performers_is_only_a_table_with_plus_and_minus_boxes():
+def test_top_performers_has_a_table_per_department_with_plus_and_minus_boxes():
     at = AppTest.from_file("../views/top_performers.py", default_timeout=180).run()
     assert not at.exception, at.exception
     assert not at.get("plotly_chart") and not at.toggle and not at.slider and not at.expander
     assert [box.label for box in at.number_input] == ["Ranks per department", "Minimum reviews"]
-    assert len(at.dataframe) == 1
+    assert [tab.label for tab in at.tabs] == ["Human Resources", "Research & Development", "Sales"]
+    assert all(len(tab.dataframe) == 1 for tab in at.tabs)
+
+
+def test_attrition_has_three_charts_and_the_table():
+    at = AppTest.from_file("../views/attrition.py", default_timeout=180).run()
+    assert not at.exception, at.exception
+    assert len(at.get("plotly_chart")) == 3 and len(at.dataframe) == 1
+
+
+def test_bottlenecks_has_two_tabs_with_the_completed_projects_in_their_own():
+    at = AppTest.from_file("../views/bottlenecks.py", default_timeout=180).run()
+    assert not at.exception, at.exception
+    assert [tab.label for tab in at.tabs] == ["Overdue projects", "Completed projects"]
+    assert len(at.tabs[1].get("plotly_chart")) == 2
+
+
+@pytest.mark.parametrize("group", ["priority", "budget_band", "department", "year"])
+def test_bottlenecks_groups_completed_projects(group):
+    at = AppTest.from_file("../views/bottlenecks.py", default_timeout=180).run()
+    at.button_group[0].set_value(group).run()
+    assert not at.exception, at.exception
+    assert len(at.tabs[1].get("plotly_chart")) == 2
+
+
+# ----------------------------------------------------------------------------- what the public site hides
+
+def locked_employee_page(monkeypatch, query: str) -> AppTest:
+    monkeypatch.setenv("APP_PASSCODE", "test-passcode")
+    at = AppTest.from_file("../views/employee_360.py", default_timeout=180)
+    at.session_state["e360_search"] = query
+    at.run()
+    assert not at.exception, at.exception
+    return at
+
+
+def test_contact_details_are_hidden_until_the_passcode_is_entered(monkeypatch):
+    employee = long_career()
+    at = locked_employee_page(monkeypatch, employee.employee_code)
+    assert [tab.label for tab in at.tabs] == TABS
+    details = " ".join(m.value for m in at.tabs[0].markdown)
+    assert employee.employee_code in details
+    assert employee.email not in details and employee.phone not in details and str(employee.date_of_birth) not in details
+
+
+@pytest.mark.parametrize("field", ["email", "phone"])
+def test_the_public_site_cannot_search_by_contact_details(field, monkeypatch):
+    at = locked_employee_page(monkeypatch, getattr(long_career(), field))
+    assert not at.tabs and not at.dataframe
+    assert any("needs the passcode" in i.value for i in at.info)
+
+
+def test_the_list_of_matches_shows_no_contact_details_until_unlocked(monkeypatch):
+    at = locked_employee_page(monkeypatch, "an")
+    assert "email" not in at.dataframe[0].value.columns or at.dataframe[0].value.empty
+    monkeypatch.delenv("APP_PASSCODE")
+    unlocked = employee_page(monkeypatch, "an")
+    assert "email" in unlocked.dataframe[0].value.columns
+
+
+def test_the_passcode_brings_contact_details_back(monkeypatch):
+    employee = long_career()
+    monkeypatch.setenv("APP_PASSCODE", "test-passcode")
+    at = AppTest.from_file("../views/employee_360.py", default_timeout=180)
+    at.session_state["e360_search"] = employee.employee_code
+    at.session_state["editor"] = True
+    at.run()
+    assert not at.exception, at.exception
+    assert employee.email in " ".join(m.value for m in at.tabs[0].markdown)
 
 
 def test_fact_cards_escape_what_users_typed(monkeypatch):

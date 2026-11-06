@@ -710,3 +710,16 @@ so changing anything else silently changed them too. They now start on the emplo
 The generated data has about 5,000 different phone numbers for 100,000 people, so a phone search usually
 lists about 20 people. Also: the Command centre's charts now form two aligned rows, and the empty space
 at the bottom of every page is gone.
+
+## Step 30 — Attrition, bottlenecks, top performers and privacy, from the user's review
+
+**Attrition risk:** three charts and the table. The heatmap and the yearly trend were removed: the trend is
+not about risk, it falls only because headcount grew while leavers stayed at about 2,150 a year, and its last
+point is an unfinished year. The back-test stays, as the evidence that the score works. Measured on the
+live site, opening a person took 6–17 s because each click redrew the page; the table is now a fragment.
+
+**Project bottlenecks:** a tab each for overdue and completed projects. The average delay of a few dozen days
+with a decimal was correct (Medium: 14,290 late days / 244 late projects = 58.6); it is now shown in whole days.
+
+**Privacy:** the public site showed real e-mail addresses and phone numbers typed in during tests. Contact and
+personal details, and searching by them, now need the passcode.

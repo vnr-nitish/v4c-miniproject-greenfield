@@ -116,9 +116,11 @@ class EmployeeManager(DatabaseConnection):
         return row
 
     def search(self, text: str | None = None, department_id: int | None = None,
-               active_only: bool = True, limit: int = 100) -> pd.DataFrame:
+               active_only: bool = True, limit: int = 100, by_contact: bool = True) -> pd.DataFrame:
         """Find employees by name, e-mail, phone number, employee code or id; any part of a name,
         an e-mail or a phone number will do. Exact matches come first (match_rank 0).
+        by_contact=False leaves e-mail and phone out of the matching: the public site can't be
+        used to find out whose address or number something is.
 
         The matching runs on hr_oltp.employees alone and only the people found are joined to their
         job, because going through the 100K-row view for every search takes seconds on the cloud.
@@ -128,12 +130,15 @@ class EmployeeManager(DatabaseConnection):
         escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")     # typed literally
         params = {"text": text, "code": text.upper(), "contains": f"%{escaped}%", "starts": f"{escaped}%",
                   "department": department_id, "active_only": active_only, "limit": limit}
-        exact = ["e.employee_code = %(code)s", "e.email = %(text)s"]
-        partial = [f"{_FULL_NAME} LIKE %(contains)s", "e.email LIKE %(contains)s"]
+        exact = ["e.employee_code = %(code)s"]
+        partial = [f"{_FULL_NAME} LIKE %(contains)s"]
+        if by_contact:
+            exact.append("e.email = %(text)s")
+            partial.append("e.email LIKE %(contains)s")
         if digits and _NUMBER_OR_CODE.fullmatch(text):                                   # 220, EMP220, EMP000220
             params.update(employee_id=int(digits), code=f"EMP{int(digits):06d}")
             exact.append("e.employee_id = %(employee_id)s")
-        if len(digits) >= 4 and _PHONE_INPUT.fullmatch(text):
+        if by_contact and len(digits) >= 4 and _PHONE_INPUT.fullmatch(text):
             params.update(digits=digits, digits_within=f"%{digits}%")
             exact.append(f"{_PHONE_DIGITS} = %(digits)s")
             partial.append(f"{_PHONE_DIGITS} LIKE %(digits_within)s")
