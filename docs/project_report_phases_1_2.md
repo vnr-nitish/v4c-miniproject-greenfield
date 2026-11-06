@@ -1,0 +1,1132 @@
+# Enterprise Employee Analytics & Data Warehouse System
+## Project Report — Phase 1 (Architecture, Modeling, Data Ingestion) and Phase 2 (SQL & ETL)
+
+**Team project · Rising Stars Greenfield Mini-Project · Stack:** Python 3.11 (pandas, Faker), MySQL 8, Streamlit, Plotly, GitHub, Streamlit Community Cloud
+**Repository:** https://github.com/vnr-nitish/v4c-miniproject-greenfield
+
+---
+
+## Contents
+1. The source dataset (IBM HR Analytics)
+2. Data synthesis — from 1,470 to 100,000 employees
+3. OLTP database design (ER model)
+4. OLAP data-warehouse design (star schema)
+5. Phase 2 — DDL execution
+6. Phase 2 — the ETL pipeline
+7. Results and verification
+
+---
+
+## 1. The source dataset (IBM HR Analytics Employee Attrition & Performance)
+
+### 1.1 Overview
+
+| Property | Value |
+|---|---|
+| File | `WA_Fn-UseC_-HR-Employee-Attrition.csv` (Kaggle) |
+| Rows | **1,470** — one per employee |
+| Columns | **35** |
+| Time dimension | **none** — a single snapshot; no dates, no history |
+| Departments | **3**: Research & Development 961 · Sales 446 · Human Resources 63 |
+| Job roles | **9** |
+| Job levels | **5** (1 = entry … 5 = executive) |
+| Attrition | Yes **237 (16.1 %)** · No 1,233 |
+| Performance rating | only **3 (Excellent)** and **4 (Outstanding)** occur |
+
+### 1.2 Departments, roles and levels in the source
+
+| Job role | Employees | Department(s) | Levels seen |
+|---|---:|---|---|
+| Sales Executive | 326 | Sales | 2 – 4 |
+| Research Scientist | 292 | Research & Development | 1 – 3 |
+| Laboratory Technician | 259 | Research & Development | 1 – 3 |
+| Manufacturing Director | 145 | Research & Development | 2 – 4 |
+| Healthcare Representative | 131 | Research & Development | 2 – 4 |
+| Manager | 102 | **all three departments** | 3 – 5 |
+| Sales Representative | 83 | Sales | 1 – 2 |
+| Research Director | 80 | Research & Development | 3 – 5 |
+| Human Resources | 52 | Human Resources | 1 – 3 |
+
+| Job level | Employees | Monthly income seen |
+|---|---:|---|
+| 1 | 543 | 1,009 – 4,968 |
+| 2 | 534 | 2,042 – 9,998 |
+| 3 | 218 | 5,210 – 13,757 |
+| 4 | 106 | 11,103 – 17,924 |
+| 5 | 69 | 18,041 – 19,999 |
+
+### 1.3 All 35 columns
+
+Scales: satisfaction / involvement 1 Low · 2 Medium · 3 High · 4 Very High; work-life balance
+1 Bad · 2 Good · 3 Better · 4 Best; rating 1 Low · 2 Good · 3 Excellent · 4 Outstanding; education
+1 Below College · 2 College · 3 Bachelor · 4 Master · 5 Doctor.
+
+| # | Column | Values in the file | Meaning | Used in the project as |
+|---:|---|---|---|---|
+| 1 | Age | 18 – 60 (median 36) | age | date of birth |
+| 2 | Attrition | Yes 237 · No 1,233 | has left? | exit date + exit reason |
+| 3 | BusinessTravel | Rarely 1,043 · Frequently 277 · Non-Travel 150 | travel frequency | job version attribute |
+| 4 | DailyRate | 102 – 1,499 | pay rate (random noise) | staging only |
+| 5 | Department | R&D 961 · Sales 446 · HR 63 | department | job version attribute |
+| 6 | DistanceFromHome | 1 – 29 km | commute | employee |
+| 7 | Education | 1 – 5 | education level | employee (lookup) |
+| 8 | EducationField | Life Sciences 606 · Medical 464 · Marketing 159 · Technical Degree 132 · Other 82 · HR 27 | field of study | employee (lookup) |
+| 9 | EmployeeCount | always 1 | constant | dropped |
+| 10 | EmployeeNumber | 1 – 2,068 | IBM id | lineage in staging |
+| 11 | EnvironmentSatisfaction | 1 – 4 | survey | yearly survey |
+| 12 | Gender | Male 882 · Female 588 | gender | employee |
+| 13 | HourlyRate | 30 – 100 | noise | staging only |
+| 14 | JobInvolvement | 1 – 4 | survey | yearly survey |
+| 15 | JobLevel | 1 – 5 | seniority | job version |
+| 16 | JobRole | 9 roles | role | job version |
+| 17 | JobSatisfaction | 1 – 4 | survey | yearly survey |
+| 18 | MaritalStatus | Married 673 · Single 470 · Divorced 327 | status | employee |
+| 19 | MonthlyIncome | 1,009 – 19,999 (median 4,919) | pay | job version |
+| 20 | MonthlyRate | 2,094 – 26,999 | noise | staging only |
+| 21 | NumCompaniesWorked | 0 – 9 | previous employers | employee (cleaned) |
+| 22 | Over18 | always Y | constant | dropped |
+| 23 | OverTime | Yes 416 · No 1,054 | overtime | yearly review |
+| 24 | PercentSalaryHike | 11 – 25 % | last pay rise | last pay change in job history |
+| 25 | PerformanceRating | 3, 4 | rating | yearly review |
+| 26 | RelationshipSatisfaction | 1 – 4 | survey | yearly survey |
+| 27 | StandardHours | always 80 | constant | dropped |
+| 28 | StockOptionLevel | 0 – 3 | stock options | job version |
+| 29 | TotalWorkingYears | 0 – 40 | whole career | prior experience = Total − YearsAtCompany |
+| 30 | TrainingTimesLastYear | 0 – 6 | trainings | yearly review |
+| 31 | WorkLifeBalance | 1 – 4 | survey | yearly survey |
+| 32 | YearsAtCompany | 0 – 40 (median 5) | tenure | **hire date** |
+| 33 | YearsInCurrentRole | 0 – 18 | time in role | date of **last role change** |
+| 34 | YearsSinceLastPromotion | 0 – 15 | time since promotion | date of **last promotion** |
+| 35 | YearsWithCurrManager | 0 – 17 | time with manager | date of **last manager change** |
+
+### 1.4 What profiling the data told us (and the design decision each finding drove)
+
+Before designing any table we studied the 1,470 IBM rows. Each finding below is written in plain
+words, with a real employee or count from the file as an example, and the design decision it led to.
+Employee numbers are IBM's own `EmployeeNumber`, so anyone can look them up in the CSV.
+
+| # | What we found | Example from the IBM file | What we did about it, and why |
+|---|---|---|---|
+| F1 | Every job role belongs to exactly one department, except **Manager**, which exists in all three. | *Sales Executive* appears only in Sales (326 people). *Manager* appears in Sales (37), R&D (54) and HR (11). | A department has many roles, and one role (Manager) sits in several departments: a **many-to-many** link. So we keep a small list table, `department_job_roles`, holding the **11 allowed department + role pairs** (Sales 3, R&D 6, HR 2). The database refuses any pair that is not on the list, such as "Sales Executive in R&D". |
+| F2 | Each role only appears at certain job levels (1 = most junior, 5 = most senior). | Sales Representative: levels 1–2 only. Manager and Research Director: levels 3–5 only. Nobody is a level-5 Sales Representative. | Each role stores its lowest and highest allowed level (`job_roles.min_job_level_id` / `max_job_level_id`). When someone is hired or moved, the stored procedures check that the level is inside that range. |
+| F3 | Each job level has its own pay range. | Level 1 earns 1,009–4,968 a month; level 5 earns 18,041–19,999. | Each level stores its pay band (`job_levels.salary_band_min` / `salary_band_max`). A salary outside the band is rejected, and the web form's pay slider only offers values inside it. |
+| F4 | The performance rating alone decides how big the pay rise can be. | All 1,244 people rated 3 (Excellent) got a rise of 11–19 %; all 226 people rated 4 (Outstanding) got 20–25 %. The two ranges never overlap. | The rise range belongs to the **rating**, not to the person. Storing it on every review would repeat the same numbers hundreds of thousands of times (a **transitive dependency**). So it is stored once, in the small table `performance_rating_levels` (one row per rating). |
+| F5 | Three pay columns, DailyRate, HourlyRate and MonthlyRate, have nothing to do with what people actually earn. | Employee 701 has the lowest salary in the file (1,009) but the highest MonthlyRate (26,999). Employee 259 has the highest salary (19,999) but a MonthlyRate of only 5,678. Their correlation with salary is about 0. | They are random numbers, so they are left out of the database design. They are kept only in the staging (raw landing) area, so every value can still be traced back to the file. |
+| F6 | The "years" columns always fit together logically. | Employee 1: 4 years in current role ≤ 6 years at the company ≤ 8 years of total career, and age 41 − 8 = started working at 33 (at least 18). Not one of the 1,470 rows breaks these rules. | The rules became **CHECK constraints** (rules the database tests on every save) and rules the data generator must follow, so all 100,000 synthetic employees obey them too. |
+| F7 | NumCompaniesWorked ("how many companies has this person worked for") also counts the **current** company, and sometimes says 0 by mistake. | Employee 5 has the value 1, but their whole 8-year career is at this company, so the "1" is this company. Employee 8 has the value 0, yet 1 of their 8 career years was spent elsewhere, so 0 is impossible. 671 rows are affected (197 with 0, 474 with 1). | A written cleaning rule (decision D19), applied in SQL during loading: no earlier job → 0; value 0 or 1 but earlier experience exists → 1; values 2–9 → value minus 1. The result, `prior_companies_count`, counts only the employers **before** this one. |
+| F8 | 440 of the 543 level-1 employees have been promoted, although level 1 is the bottom level, so they cannot have moved up from a lower one. | Employee 5: Research Scientist, 8 years at the company, last promoted 3 years ago, and still at level 1. | A promotion does not always mean a higher level; it can be a **pay-grade promotion** (more pay at the same level). The job history allows both kinds (decision D18). |
+| F9 | Every single (unmarried) employee has stock-option level 0. | All 470 single employees have level 0; married and divorced employees have levels 0 to 3. | A quirk of IBM's fictional data. It is noted, left as it is, and copied by the data generator. |
+| F10 | Overtime is the strongest single sign that someone will leave. | 127 of the 416 people who work overtime left (30.5 %), against 110 of the 1,054 who do not (10.4 %): about three times as likely. | Overtime is stored for **every review year**, not just once, so the dashboards can show how it changes over time and the attrition-risk score can use it (2 points). |
+| F11 | How often someone travels for work does not depend on their role. | In every role, roughly two-thirds to three-quarters of people travel rarely (66–78 %). | Travel is stored with the person's job record (it can change when their job changes), not as a fixed property of the role. |
+| F12 | Job level runs from 1 to 5. It is closely tied to pay but has nothing to do with the performance rating. | Employees per level: 543 / 534 / 218 / 106 / 69. The share rated 4 is similar at every level (10–17 %). Level and salary have a correlation of 0.95 (very strong). | Levels (`job_levels`, with the pay bands from F3) and ratings (`performance_rating_levels`) are two separate tables with no link between them. Ratings 1 and 2 never occur in the file, so their pay-rise ranges were set below rating 3: 0–4 % and 5–10 %. |
+
+**Terms used in this table**
+
+| Term | Meaning in simple words |
+|---|---|
+| Many-to-many | Both sides can have several of the other: one department has many roles, and one role (Manager) can be in many departments. |
+| List (bridge) table | A small table that only records which combinations are allowed, here the 11 department + role pairs. |
+| Transitive dependency | A value that depends on another column instead of on the row itself: the pay-rise range depends on the rating, not on the employee. Such values go in their own table so they are stored once. |
+| CHECK constraint | A rule written into the table that the database tests every time a row is saved; a row that breaks it is refused. |
+| Stored procedure | A small program saved inside the database that checks and saves data, so every change follows the same rules. |
+| Correlation | A number from −1 to 1 showing whether two columns move together: about 0 means no relationship, close to 1 means they rise together. |
+| Staging | The raw landing area where data arrives exactly as delivered, before it is cleaned and loaded into the main database. |
+
+---
+
+## 2. Data synthesis — from 1,470 to 100,000 employees (Phase 1, task 1)
+
+### 2.1 What we had, and what we needed
+
+| | What IBM gave us | What the project needs |
+|---|---|---|
+| People | 1,470 | 100,000 or more |
+| Rows per person | 1 (a single "photo" of today) | many: a job history, a review and a survey every year, project work |
+| Dates | none | hire, promotion, review and exit dates |
+
+We built the data in Python with **pandas** (for tables) and **Faker** (for fake names, e-mails and
+phone numbers), in four steps:
+
+1. **Make more people:** turn 1,470 IBM employees into 100,000 different ones (2.2).
+2. **Give everyone a past:** work out each person's career from IBM's "years" columns (2.3).
+3. **Add yearly records:** one performance review and one survey per person per year, 2019–2025 (2.4).
+4. **Add project work:** 2,000 projects and the people who work on them (2.5).
+
+The result is about **1.85 million rows** in six tables. Section 2.6 explains why 100,000 people
+produce that many rows.
+
+### 2.2 Step 1: from 1,470 people to 100,000 (decision D16)
+
+**In one line:** each IBM employee is used as a **template** about 68 times (100,000 ÷ 1,470 ≈ 68),
+and every copy becomes a different person.
+
+**How it works**
+
+1. **Sort the 1,470 people into groups.** A group is people who share four things: stayed or left,
+   department, role and level. There are 52 groups. Example: "stayed, Sales, Sales Executive,
+   level 3" holds 62 of the 1,470 IBM people, which is 4.22 %.
+2. **Give each group the same share of the 100,000.** 4.22 % of 100,000 = 4,218 people. To fill
+   those places, templates are picked from that group at random, and the same template can be picked
+   many times. Because every group keeps its share, the overall mix stays the same as IBM's:
+   16.12 % leavers and 65 % R&D in both.
+3. **Make each copy a different person.**
+   - **New:** name, e-mail, phone number and date of birth, made by Faker (Indian names, D20).
+   - **Changed a little:** salary ±7 % (always inside the level's pay band), age ±1 year, distance
+     from home ±2 km.
+   - **Kept exactly:** department, role, level, the "years" columns, rating, overtime and survey
+     answers. They describe the person's real situation, so they must stay true to IBM.
+
+**Example: IBM employee 228** (woman, 30, Sales Executive, level 3, salary 9,419, lives 5 km away) was
+picked 73 times. Four of the 73 people made from that row:
+
+| | Name | Age | Monthly salary | Distance from home |
+|---|---|---|---|---|
+| IBM employee 228 (the template) | (IBM has no names) | 30 | 9,419 | 5 km |
+| EMP019977 | Chameli Dube | 30 | 9,077 | 3 km |
+| EMP020026 | Yashica Nanda | 30 | 9,021 | 5 km |
+| EMP020081 | Aishani Halder | 31 | 9,936 | 6 km |
+| EMP020478 | Ira Bhattacharyya | 30 | 9,672 | 5 km |
+
+All four do the same job for the same number of years, but they are different people.
+
+**Why this way?**
+
+| Other way | What goes wrong |
+|---|---|
+| Copy every row 68 times | 68 identical twins of each person: obviously fake |
+| Fill each column at random, on its own | Nonsense people, such as a Sales Representative with a director's salary; real patterns (overtime → leaving) disappear |
+| **Our way** | Every person is a real IBM combination, slightly varied, so the patterns found in 1.4 still hold for all 100,000 |
+
+### 2.3 Step 2: giving everyone a past (the job history)
+
+IBM shows each person only as they are today. But four columns say **how many years ago** something
+happened: when they joined, started their current role, were last promoted, and got their current
+manager. We set "today" to **30 June 2026** and count back (for a leaver, from the exit date).
+
+For EMP019977:
+
+| IBM says | Becomes the date |
+|---|---|
+| joined 10 years ago | 7 Jul 2015 |
+| in the current role for 9 years | 29 May 2017 |
+| last promoted 7 years ago | 28 Oct 2018 |
+| with the current manager for 4 years | 5 Aug 2021 |
+
+Then each change is undone, newest first: before the new manager there was a different manager;
+before the promotion, one level lower and without the 12 % pay rise; before the role change, a
+different role. The career becomes:
+
+- **7 Jul 2015:** hired as Sales Representative, level 2, 7,685 a month
+- **29 May 2017:** role change to Sales Executive, 8,104
+- **28 Oct 2018:** promoted to level 3 (+12 %), 9,077
+- **5 Aug 2021:** new manager; still the same job today
+
+Each line is one row (a "version") in the job history. The warehouse keeps every version; that is
+what **SCD Type 2** means. Counting full years from these dates to 30 June 2026 gives 10, 9, 7 and 4
+again, IBM's original numbers, and an automated test checks this for all 100,000 people. To see this
+career on the website, open **Employee 360** and enter `EMP019977`.
+
+**Three extra rules keep the careers realistic**
+
+- **Promotion without a level change (D18).** A Sales Executive's lowest level is 2, so a level-2
+  Sales Executive who was promoted cannot have been at level 1 before. For such people the
+  promotion is a pay rise at the same level.
+- **Earlier promotions for long careers (D24).** IBM only gives the *last* promotion. Without extra
+  promotions, some long-serving people would have been hired as a level-3 Manager at 18. Adding
+  earlier promotions cut these "too senior at hire" cases from 6.1 % to about 1 %.
+- **Managers and transfers.** Everyone reports to someone in the same department at a higher level.
+  About 10 % of role changes are transfers from another department.
+
+### 2.4 Step 3: a review and a survey every year
+
+| | Performance review | Survey |
+|---|---|---|
+| When | for each year 2019–2025, held 15 Jan – 15 Mar of the following year | every year, September–October |
+| Who | people who joined by 30 September of that year and still work there on the review date | everyone working there on the survey day |
+| What it holds | rating 1–4, KPI score 0–100, overtime yes/no, number of trainings | five satisfaction scores (1–4) |
+| The latest one | exactly IBM's values | exactly IBM's answers |
+| Earlier years | counted back one year at a time, with small changes | the same |
+
+"Small changes" means, for example, that an Outstanding rating stays Outstanding in the year before
+60 % of the time, and overtime stays overtime 80 % of the time.
+
+Two fixes make this history believable:
+
+- **The same mix every year (D26).** The first version made the last year look like a sudden
+  improvement (low ratings fell from 4 % to 0 % in a single year). Now every earlier year has the
+  same mix as IBM's data, so the trend charts show no fake jump.
+- **KPI scores (D27).** The KPI is drawn at random around a centre set by the rating. If a score
+  falls outside the allowed range, it is drawn again. (The first version cut it to the limit
+  instead, which gave 1,810 people a KPI of exactly 100.)
+
+| Rating | KPI is around | Allowed range |
+|---|---|---|
+| 4 Outstanding | 92 | 85–100 |
+| 3 Excellent | 78 | 60–95 |
+| 2 Good | 60 | 40–75 |
+| 1 Low | 42 | 20–60 |
+
+### 2.5 Step 4: projects and who works on them
+
+- **2,000 projects**, shared between departments by size. Each one is led by a manager at level 3
+  or above from that department. About 40 % of finished projects end late, by 1 to 120 days, so the
+  delay charts have something to show.
+- **503,240 assignments.** An assignment means a person works on a project for part of their time.
+  - Each year, 92 % of people are on a project, and 25 % of those also on a second one at the same
+    time.
+  - Each assignment takes 20–100 % of the person's time.
+  - About 5 % of assignments are allowed to push a person above 100 %, so the bottleneck page has
+    real overloaded people to find.
+
+### 2.6 Why 100,000 employees means about 1.85 million rows
+
+**100,000 is the number of people.** Each person also has rows in the other tables: one for each job
+version, one review and one survey per year, and one for each project. Together, all the tables hold
+about 1.85 million rows.
+
+Example: EMP019977, who has worked here since 2015:
+
+| Table | Rows for this person | Why |
+|---|---:|---|
+| Employees | 1 | the person |
+| Job history | 4 | hired, then 3 changes |
+| Surveys | 7 | one per year, 2019–2025 |
+| Reviews | 7 | one per year, 2019–2025 |
+| Assignments | 8 | projects worked on over the years |
+| **Total** | **27** | |
+
+The whole company:
+
+| Table | Rows | Rows per employee (average) |
+|---|---:|---:|
+| Employees | 100,000 | 1 |
+| Job history | 308,986 | 3.1 |
+| Surveys | 468,646 | 4.7 |
+| Reviews | 463,015 | 4.6 |
+| Assignments | 503,240 | 5.0 |
+| Projects | 2,000 | shared by everyone |
+| **Total** | **1,845,887 ≈ 1.85 million** | **about 18.5** |
+
+The averages are below 7 because many people joined after 2019 or left before 2025.
+
+The raw files hold 1,889 more rows (1,847,776 in total): 500 employees sent twice and 1,389 reviews
+resubmitted with a corrected KPI, both planted on purpose (2.8). The Phase 2 cleaning removes them.
+
+### 2.7 Decisions at a glance
+
+| ID | What we decided, in simple words | Why |
+|---|---|---|
+| D16 | Each IBM person is a template used about 68 times; every copy gets a new identity and small changes (2.2) | Keeps IBM's real patterns, but no two people are the same |
+| D17 | "Today" is 30 June 2026. Reviews for 2019–2025, held January–March of the next year; surveys every September–October; leavers left between 2019 and June 2026 | Seven years of history for the trend charts, on a realistic calendar |
+| D18 | Some promotions are a pay rise without a level change (2.3) | A role's level range must never be broken (finding F8) |
+| D19 | The "number of earlier employers" column is fixed in SQL while loading, not in Python | Cleaning belongs in the ETL, where it can be seen and tested (finding F7) |
+| D20 | Indian names (Faker, locale en_IN) | Matches the Indian financial year (April–March) used in the warehouse |
+| D21 | A few counted mistakes are added to the raw data on purpose (2.8) | Gives the SQL cleaning real work, and a test proves each one was fixed |
+| D24 | Earlier promotions are added to long careers (2.3) | Otherwise some people would be hired as senior managers at 18 (6.1 % → about 1 %) |
+| D26 | Older reviews and surveys keep the same mix as IBM's (2.4) | The first version showed a fake sudden improvement in the last year |
+| D27 | A KPI score outside its rating's range is drawn again (2.4) | Cutting at the limit had given 1,810 people a KPI of exactly 100 |
+
+### 2.8 Planted data-quality problems (D21)
+
+Real raw data is messy. So that the SQL cleaning in Phase 2 has real work to do, a few counted
+mistakes were added on purpose. A test checks that every one of them was fixed.
+
+| Problem | Count | Cleaned in Phase 2 by |
+|---|---:|---|
+| Employee sent twice | 500 | `ROW_NUMBER()`, newest kept |
+| Gender written as M / F | 1,027 | `CASE` → Male / Female |
+| Department / role labels: wrong case, spaces, aliases ("R&D", "HR", "Sales Dept") | 6,172 | `TRIM` + label map |
+| Review resubmitted with a corrected KPI | 1,389 | `ROW_NUMBER()` per employee and year, latest kept |
+
+### 2.9 Loading into staging
+
+The six generated tables are bulk-loaded into the **`hr_staging`** schema (tables mirror the files,
+**no constraints**, so dirty data can land) with batched multi-row inserts of 5,000 rows — 1.85
+million rows in about 1–1.5 minutes. Generation and validation of 100,000 employees takes about
+30 seconds with vectorized pandas / NumPy.
+
+### 2.10 Validation, and what did not work at first
+
+The synthesizer checks **42 business rules** (0 violations) and measures **fidelity**: rebuilding the
+IBM columns from the generated history gives YearsInCurrentRole and YearsSinceLastPromotion **100 %**,
+YearsWithCurrManager **98.09 %**, the last salary hike within one point **92.09 %**.
+
+| Problem found | Fix |
+|---|---|
+| A promotion on the same date as a transfer was labelled "Transfer" | "Promotion" takes precedence |
+| Transfers could keep the same role or contradict the manager dates | Transfers must change role and respect IBM's manager dates |
+| 28 managers who left mid-period in a 5,000-employee test | Fallback removed; early periods without an eligible manager stay empty (1 % of current versions) |
+| First assignment design left 45 % of reviews without a project, then over-allocated 58 % | Yearly staffing anchor: 3.7 % without project, 1.8 % ever over-allocated |
+| Assignment generation took 75 s | Pre-bucketed and vectorized: 9 s |
+| The latest review cycle looked like a sudden improvement (low ratings 4 % → 0 %, overtime 35 % → 24 %) | Earlier years now follow the snapshot's distribution (D26); verified that employees, job history, projects and assignments stayed identical |
+
+---
+
+## 3. OLTP database design — `hr_oltp` (Phase 1, task 2)
+
+### 3.1 Method
+
+Data profiling → functional-dependency analysis → normalization to **3NF / BCNF** → temporal modeling
+(effective-dated history) → physical design for 100,000+ employees.
+
+### 3.2 The 14 tables
+
+**8 reference (lookup) tables**
+
+| Table | Holds | Primary key | Notes |
+|---|---|---|---|
+| departments | 3 departments (HR, RND, SAL) | department_id | code and name unique |
+| job_roles | 9 roles + allowed level range | job_role_id | min / max level → job_levels |
+| department_job_roles | the 11 valid department–role pairs | (department_id, job_role_id) | bridge for many-to-many (F1) |
+| job_levels | 5 levels + salary bands | job_level_id | Entry, Intermediate, Senior, Lead, Executive |
+| education_levels | 1–5 | education_level_id | |
+| education_fields | 6 fields | education_field_id | |
+| performance_rating_levels | 1–4 + salary-hike range | rating_id | Low 0–4 %, Good 5–10 %, Excellent 11–19 %, Outstanding 20–25 % |
+| exit_reasons | 9 reasons + voluntary flag | exit_reason_id | 6 voluntary, 3 involuntary |
+
+**6 core tables**
+
+| Table | Holds | Primary key | Important keys and rules |
+|---|---|---|---|
+| employees | the person (no job data) | employee_id | business key `employee_code` EMP000001 (unique, format check); e-mail unique; at least 18 on the hire date; exit date ↔ exit reason together; `is_active` generated |
+| employee_job_history | **every job version**: department, role, level, manager, pay, stock, travel, change reason, effective dates | history_id | composite FK (department, role) → the valid pair; `manager_id` → employees; unique (employee, start date); **one current version per employee** enforced by a generated unique column |
+| employee_surveys | yearly satisfaction survey (5 scores 1–4) | survey_id | unique (employee, year) |
+| projects | 2,000 projects | project_id | code PRJ00001; actual end date set exactly when Completed / Cancelled |
+| project_assignments | employee ↔ project, allocation % | assignment_id | unique (employee, project, start) |
+| performance_reviews | yearly review: rating, KPI, training, overtime, reviewer, project | review_id | unique (employee, review year); reviewer ≠ employee; review date in the review year or the next |
+
+### 3.3 Relationships (how to read the ER diagram)
+
+The diagram (`diagrams/oltp_er_diagram.drawio`) has **employees** in the centre:
+
+| Parent (one) | Child (many) | Meaning |
+|---|---|---|
+| employees | employee_job_history | every employee has 1 or more job versions (the first is "Hire") |
+| employees (as manager) | employee_job_history | a job version names the person's manager (self-reference) |
+| department_job_roles | employee_job_history | a job version is a valid department–role pair |
+| job_levels | employee_job_history | the version's level |
+| departments / job_roles | department_job_roles | the bridge resolving many-to-many |
+| job_levels | job_roles | each role's minimum and maximum level |
+| employees | employee_surveys | one survey per year |
+| employees (reviewed) and employees (reviewer) | performance_reviews | two relationships to the same table |
+| projects, performance_rating_levels | performance_reviews | the main project that year; the rating label |
+| departments, employees (project manager) | projects | owning department; project manager |
+| employees, projects | project_assignments | many-to-many staffing |
+| education_levels, education_fields, exit_reasons | employees | lookups |
+
+### 3.4 Data integrity in five layers
+
+1. Declarative constraints — primary, foreign, unique and CHECK constraints.
+2. A generated-column unique index — at most one current job version per employee.
+3. Stored procedures — rules constraints cannot express (role offered by the department, level in
+   range, pay in band, no overlapping history).
+4. Python entity classes — validate input before it reaches the database (Phase 3).
+5. Validation SQL — run after every load.
+
+All foreign keys are **ON DELETE RESTRICT**: HR history is never deleted; leaving is an exit date.
+
+### 3.5 Decisions, and what did not work
+
+| ID | Decision | Instead of | Why |
+|---|---|---|---|
+| D1 | 14 tables: 8 reference + 6 core | a first 10-table design | The first design did not trace all 35 columns and was not data-driven — it was rejected and redone after profiling |
+| D2 | Manager kept inside the job history | a separate reporting-line table | One timeline; a simpler, correct SCD Type 2 ETL |
+| D3 | IBM's official 1–4 rating scale | a custom 1–5 scale | Faithful to the source |
+| D4 | Survey scales enforced by CHECK | lookup tables | No 5 extra indexes on ~470K rows |
+| D5 | 100,000 employees | 30,000 | Meets "100,000+" literally |
+| D25 | Keep 14 tables after reviewing the five entities in the problem statement | exactly five tables | Five tables reach 3NF only by dropping the job history, surveys and business rules |
+
+Also rejected: a yearly salary-history table (would make the employee dimension larger than the fact
+table), one generic lookup table (an anti-pattern), triggers for SCD2 (procedures are testable),
+MySQL ENUM (CHECK is standard SQL).
+
+---
+
+## 4. OLAP data-warehouse design — `hr_dw` (Phase 1, task 3)
+
+### 4.1 Method — Kimball's four steps
+
+| Step | Decision |
+|---|---|
+| 1. Business process | the annual performance review (with that year's survey) |
+| 2. Grain | **one row per performance review** = one employee in one review year (atomic) |
+| 3. Dimensions | employee (SCD Type 2), department, project, date |
+| 4. Facts | rating, KPI, training, overtime, income at review, five survey scores |
+
+**Star, not snowflake (D15):** the problem statement asks for a star; fewer joins; each dimension is
+self-contained (department and manager names flattened into the employee dimension); normalizing would
+save only about 20 MB.
+
+### 4.2 The star
+
+```
+                  dim_date
+                     │
+dim_department ── fact_performance_reviews ── dim_project
+                     │
+                dim_employee  (SCD Type 2)
+```
+
+| Table | Type | Surrogate key | Natural key | Rows |
+|---|---|---|---|---:|
+| fact_performance_reviews | fact | review_id (degenerate) | — | 463,015 |
+| dim_employee | **SCD Type 2** | employee_sk | employee_id | 308,986 versions |
+| dim_department | SCD Type 1 | department_sk | department_id | 3 |
+| dim_project | SCD Type 1, flattened | project_sk (**−1 = "No Project"**) | project_id | 2,001 |
+| dim_date | static | date_sk = YYYYMMDD | full_date | 5,844 (2015–2030) |
+
+### 4.3 The columns
+
+**`dim_employee`** — one row per job version:
+
+| Group | Columns | Change handling |
+|---|---|---|
+| Keys | employee_sk (surrogate), employee_id (natural), employee_code | — |
+| Person | full name, gender, date of birth, marital status, education level and field, distance, prior experience and companies, hire date, exit date and reason, voluntary flag, attrition flag | **Type 1**: a correction overwrites every version |
+| Job | department code and name, job role, job level and title, manager id and name, monthly income, salary band, stock options, travel, change reason | **Type 2**: a change creates a new version |
+| SCD control | **start_date**, **end_date** (9999-12-31 when current), **is_current**, version_number, row_hash (MD5 of the Type 2 columns) | — |
+
+No e-mail or phone in the warehouse (data minimization, D13).
+
+**`fact_performance_reviews`:** keys date_sk, employee_sk (**the version valid on the review date**),
+department_sk, project_sk; measures performance_rating, kpi_score, training_sessions, overtime_flag,
+monthly_income_at_review, environment / job / relationship satisfaction, work-life balance, job
+involvement (survey measures may be empty if there was no survey that year).
+
+**`dim_date`:** day, weekday, week, month, quarter, calendar year, year-month, **Indian fiscal year**
+(April–March, e.g. FY2024-25) and fiscal quarter.
+
+**`dim_project`:** code, name, owning department and manager names (flattened), dates, status,
+priority, budget, and derived planned duration, delay days, is_delayed, budget band.
+
+### 4.4 SCD Type 2 — how history works
+
+| employee_sk | department | role | level | start_date | end_date | is_current |
+|---|---|---|---|---|---|---|
+| 1001 | R&D | Laboratory Technician | 1 | 2017-03-01 | 2020-03-31 | 0 |
+| 1002 | R&D | Laboratory Technician | 2 | 2020-04-01 | 2023-06-30 | 0 |
+| 1003 | R&D | Research Scientist | 2 | 2023-07-01 | 9999-12-31 | 1 |
+
+A review held in 2021 links to **1002** — the employee *as they were* — so history is reported
+truthfully. The fact load finds that version with
+`review_date BETWEEN start_date AND end_date`. OLTP uses half-open periods (end = next start);
+the warehouse uses inclusive end dates (Kimball's BETWEEN convention).
+
+### 4.5 Surrogate keys and the special member
+
+Every dimension has a warehouse-generated surrogate key. A review without a project points to
+**project_sk = −1 "No Project Assigned"** (16,961 reviews) instead of a NULL key; every other key is
+mandatory — a failed lookup is a data error, logged as a rejected row, not hidden behind "Unknown".
+
+### 4.6 Decisions
+
+| ID | Decision | Why |
+|---|---|---|
+| D6 | Grain = one row per review | atomic; matches the business event |
+| D7 | Survey measures in the review fact | same grain; one star |
+| D8 | Every job-history attribute is Type 2 (1 : 1 with OLTP versions) | simple and auditable |
+| D9 | Indian fiscal year in dim_date | realistic for an Indian HR context |
+| D10 | dim_project Type 1 | no required analysis needs project history |
+| D11 | Special member only in dim_project (−1) | correct counts, visible data errors |
+| D12 | Foreign keys declared in the warehouse | integrity and a self-documenting schema |
+| D13 | No personal contact data in the warehouse | data minimization |
+| D14 | Inclusive end dates in the warehouse, half-open in OLTP | BETWEEN lookups; conversion documented |
+| D15 | Star, not snowflake | required; fewer joins |
+
+---
+
+## 5. Phase 2 — DDL execution
+
+### 5.1 The scripts
+
+Nine numbered SQL scripts in `sql/`, run in order:
+
+| Script | Statements | What it creates |
+|---|---:|---|
+| 00_create_schemas.sql | 3 | the schemas `hr_staging`, `hr_oltp`, `hr_dw` (utf8mb4) |
+| 01_oltp_ddl.sql | 31 | the 14 OLTP tables with keys, foreign keys, CHECKs, generated columns, indexes |
+| 02_oltp_reference_data.sql | 9 | the reference rows (departments, roles, valid pairs, levels with bands, ratings, exit reasons, education) |
+| 03_oltp_views.sql | 3 | `vw_employee_current`, `vw_employee_snapshot` (rebuilds the IBM columns) |
+| 04_dw_ddl.sql | 17 | the star schema + ETL log tables |
+| 05_dw_seed.sql | 2 | warehouse seed rows |
+| 06_staging_ddl.sql | 13 | the six staging tables (no constraints) |
+| 07_oltp_procedures.sql | 11 | migration and application procedures |
+| 08_dw_procedures.sql | 23 | the warehouse ETL procedures |
+| **Total** | **112** | |
+
+### 5.2 How they were executed
+
+- **`python scripts/setup_database.py`** runs all nine in order (in Phase 3 it became a thin front end
+  over the `SchemaManager` class). A custom SQL splitter handles comments, quoted text and the
+  `DELIMITER` blocks around procedures, so procedures keep their comments on the server.
+- **Safety:** if a script would drop tables that already hold data, it refuses unless `--force` is
+  given; `--only 03 07 08` re-installs views and procedures without touching data.
+- The same scripts can be run one by one in **MySQL Workbench**, and the same command built the
+  **cloud database** (Aiven MySQL) unchanged.
+- A dedicated database user `hr_app` (not root) owns the work; credentials live only in `.env`.
+
+---
+
+## 6. Phase 2 — the ETL pipeline
+
+### 6.1 Architecture: two stages, one audit trail
+
+```
+hr_staging ──(Stage 1: migration, once)──► hr_oltp ──(Stage 2: warehouse ETL, repeatable)──► hr_dw
+ raw, dirty     de-duplicate · clean · resolve      dimensions · SCD Type 2 · fact
+                labels and codes · validate
+                       every step logged in hr_dw.etl_batch_log (+ etl_rejected_rows)
+```
+
+Run with `python scripts/run_etl.py --migrate` (first time) or `python scripts/run_etl.py`
+(warehouse refresh), or the **Run warehouse ETL** button in the web app.
+
+### 6.2 Stage 1 — `sp_migrate_from_staging` (staging → OLTP)
+
+Tables load in foreign-key order (employees → job history → projects → assignments → surveys →
+reviews). Each table follows the same four-step **CTE** pattern:
+
+| Step | SQL technique | Purpose |
+|---|---|---|
+| ranked | `ROW_NUMBER() OVER (PARTITION BY business key ORDER BY stg_row_id DESC)` | keep one copy of a record sent twice |
+| cleaned | `TRIM`, case-insensitive matching, `CASE` | standardize labels and codes |
+| resolved | joins to the lookup tables; a `CASE` names the first broken rule | turn text into ids, validate |
+| loaded / rejected | `INSERT`; rejects to `etl_rejected_rows` | nothing is silently lost |
+
+Results: every planted problem fixed in exactly the manifest's numbers (500 duplicates, 1,027 gender
+codes, 6,172 labels, 1,389 resubmissions), 16,500 NumCompaniesWorked values recoded (D19), job-version
+end dates re-checked with `LEAD()` (0 corrections), **0 rejected rows**.
+
+### 6.3 Stage 2 — `sp_run_etl` (OLTP → warehouse)
+
+| Step | Procedure | Technique |
+|---|---|---|
+| 1 | `sp_load_dim_date` | **recursive CTE** generating 2015–2030 with the Indian fiscal year |
+| 2 | `sp_load_dim_department` | SCD Type 1 (update changed, insert new) |
+| 3 | `sp_load_dim_project` | SCD Type 1 + derived delay, duration, budget band; the −1 member |
+| 4 | `sp_load_dim_employee_scd2` | **SCD Type 2** with `ROW_NUMBER()`, `LEAD()`, MD5 row hash |
+| 5 | `sp_load_fact_performance_reviews` | incremental (`NOT EXISTS`), **point-in-time** key lookup |
+
+Dimensions load before the fact, so a review always finds its dimension rows.
+
+### 6.4 The SCD Type 2 algorithm
+
+| Order | Detects | Action |
+|---|---|---|
+| 1 | a personal attribute changed (name, marital status, exit) | Type 1: overwrite every version |
+| 2 | same version, different row hash | correct the version in place |
+| 3 | a newer version started | **expire** the old row: end date = new start − 1 day, is_current = 0 |
+| 4 | a version the warehouse has not seen | **insert** a new row with a new surrogate key |
+
+Expire runs before insert, so there is never more than one current version. **One procedure, three
+uses:** the initial load (308,986 versions), incremental runs (only differences — a re-run with no
+change writes 0 rows), and a single employee changed in the web app (0.02 s).
+
+### 6.5 Logging and error handling
+
+Every run is a **batch** in `etl_batch_log` (a header plus one row per step and per data-quality
+fix, so the log is also a data-quality report). An `EXIT HANDLER` catches any SQL error: `ROLLBACK`
+undoes the run, the batch is marked `FAILED` with the step and MySQL's message, and the error is
+re-raised to the caller. Only the entry points commit; the application's job change and its warehouse
+update share **one transaction** (E3).
+
+### 6.6 Decisions, and what did not work
+
+| ID | Decision / finding | Result |
+|---|---|---|
+| E1 | The migration is one-time, with an explicit full-reload switch | refuses to run twice; no duplicates |
+| E2 | One SCD2 procedure for initial, incremental and single-employee loads | one tested code path |
+| E3 | Only entry points commit | the app's change and its warehouse version commit together |
+| E4 | Department aliases handled in a cleaning CTE | no extra table or diagram change |
+| E7 | `INSERT … ON DUPLICATE KEY UPDATE` counted wrongly and left key gaps | replaced by update-then-insert |
+| E9 | A refused migration rolled back its own log header | the header is committed first |
+| E10 | A re-run with no changes took 93 s (`EXPLAIN ANALYZE`: buffer pool overflow, unordered writes) | person / version split, ordered inserts: **47 s** |
+| E11 | `GREATEST(unsigned, signed)` returned DECIMAL and failed a system variable | explicit CAST; the failure proved the error handler |
+| Cloud | The free cloud MySQL (1 CPU, 32 MB buffer pool) could not finish the hour-long migration | the finished tables were copied from the local database and verified table by table |
+
+---
+
+## 7. Results and verification
+
+| Run (100,000 employees, laptop, MySQL 8.0) | Rows | Time |
+|---|---:|---:|
+| Stage 1 migration | 1,845,887 loaded, 0 rejected | about 4 minutes |
+| Stage 2 initial warehouse load | 774,004 (308,986 versions, 463,015 facts) | about 2.5 minutes |
+| Stage 2 re-run, nothing changed | 0 | 47 s |
+| One employee from the app | 2 | 0.02 s |
+
+**Verified automatically** (`tests/test_etl.py`, also runnable in Workbench from
+`sql/validation_queries.sql`):
+- every staged record loaded or explained; every planted problem fixed in the manifest's numbers;
+- **lossless reconstruction:** the IBM columns rebuilt from the OLTP database match staging — 100 %
+  for age, tenure, years in role, years since promotion, department, role, level, income; 98.09 % for
+  years with the manager; 92.09 % for the last salary hike;
+- warehouse versions 1 : 1 with OLTP versions, periods contiguous, one current version per employee;
+- every fact linked to the employee version valid on its review date;
+- re-running the ETL changes nothing; a department change creates exactly one new version.
+
+The whole project's test suite (Phases 1–5) has **228 tests, all passing**.
+
+---
+
+## Appendix — Complete schema reference
+
+Generated from MySQL's own catalogue (`information_schema`), so it matches the database exactly. **PK** = primary key · **FK → table.column** = foreign key (the connection to another table) · **UQ** = unique · *generated* = computed by the database. Types: TINYINT/SMALLINT/INT = whole numbers of increasing size, DECIMAL = exact money / scores, VARCHAR(n) = text up to n characters, CHAR(n) = fixed-length text, DATE / DATETIME = dates, TINYINT(1) = yes/no flag.
+
+### OLTP database `hr_oltp` (14 tables)
+
+**`department_job_roles`** — Valid department-role pairs; resolves the M:N relationship (finding F1)
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| department_id | tinyint unsigned | no | PK · FK → departments.department_id |
+| job_role_id | tinyint unsigned | no | PK · FK → job_roles.job_role_id |
+
+**`departments`** — Organizational departments
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| department_id | tinyint unsigned | no | PK · auto-increment |
+| department_code | varchar(10) | no | UQ |
+| department_name | varchar(60) | no | UQ |
+
+**`education_fields`** — Field of study
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| education_field_id | tinyint unsigned | no | PK · auto-increment |
+| field_name | varchar(60) | no | UQ |
+
+**`education_levels`** — Education level (1 Below College ... 5 Doctor)
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| education_level_id | tinyint unsigned | no | PK |
+| level_name | varchar(30) | no | UQ |
+
+**`employee_job_history`** — Effective-dated job versions; single source of truth for SCD Type 2
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| history_id | int unsigned | no | PK · auto-increment |
+| employee_id | int unsigned | no | UQ (employee_id, effective_start_date) · FK → employees.employee_id |
+| department_id | tinyint unsigned | no | FK → department_job_roles.department_id |
+| job_role_id | tinyint unsigned | no | FK → department_job_roles.job_role_id |
+| job_level_id | tinyint unsigned | no | FK → job_levels.job_level_id |
+| manager_id | int unsigned | yes | FK → employees.employee_id |
+| monthly_income | decimal(10,2) | no |  |
+| stock_option_level | tinyint unsigned | no |  |
+| business_travel | varchar(20) | no |  |
+| change_reason | varchar(20) | no |  |
+| effective_start_date | date | no | UQ (employee_id, effective_start_date) |
+| effective_end_date | date | yes |  |
+| current_version_key | int unsigned | yes | UQ · *generated* |
+| created_at | datetime | no | default: time of insert |
+
+**`employee_surveys`** — Yearly engagement survey (scales 1-4)
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| survey_id | int unsigned | no | PK · auto-increment |
+| employee_id | int unsigned | no | UQ (employee_id, survey_year) · FK → employees.employee_id |
+| survey_date | date | no |  |
+| survey_year | smallint unsigned | yes | UQ (employee_id, survey_year) · *generated* |
+| environment_satisfaction | tinyint unsigned | no |  |
+| job_satisfaction | tinyint unsigned | no |  |
+| relationship_satisfaction | tinyint unsigned | no |  |
+| job_involvement | tinyint unsigned | no |  |
+| work_life_balance | tinyint unsigned | no |  |
+| created_at | datetime | no | default: time of insert |
+
+**`employees`** — The person. Job data lives in employee_job_history.
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| employee_id | int unsigned | no | PK · auto-increment |
+| employee_code | char(9) | no | UQ |
+| first_name | varchar(50) | no |  |
+| last_name | varchar(50) | no |  |
+| email | varchar(120) | no | UQ |
+| phone | varchar(20) | no |  |
+| gender | varchar(10) | no |  |
+| date_of_birth | date | no |  |
+| marital_status | varchar(10) | no |  |
+| education_level_id | tinyint unsigned | no | FK → education_levels.education_level_id |
+| education_field_id | tinyint unsigned | no | FK → education_fields.education_field_id |
+| distance_from_home_km | tinyint unsigned | no |  |
+| prior_experience_years | tinyint unsigned | no |  |
+| prior_companies_count | tinyint unsigned | no |  |
+| hire_date | date | no |  |
+| exit_date | date | yes |  |
+| exit_reason_id | tinyint unsigned | yes | FK → exit_reasons.exit_reason_id |
+| is_active | tinyint(1) | yes | *generated* |
+| created_at | datetime | no | default: time of insert |
+| updated_at | datetime | no | default: time of insert |
+
+**`exit_reasons`** — Why an employee left; separates voluntary from involuntary attrition
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| exit_reason_id | tinyint unsigned | no | PK · auto-increment |
+| reason_name | varchar(60) | no | UQ |
+| is_voluntary | tinyint(1) | no |  |
+
+**`job_levels`** — Seniority levels with monthly salary bands (finding F3)
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| job_level_id | tinyint unsigned | no | PK |
+| level_title | varchar(30) | no | UQ |
+| salary_band_min | decimal(10,2) | no |  |
+| salary_band_max | decimal(10,2) | no |  |
+
+**`job_roles`** — Job roles with their allowed level range (finding F2)
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| job_role_id | tinyint unsigned | no | PK · auto-increment |
+| role_name | varchar(60) | no | UQ |
+| min_job_level_id | tinyint unsigned | no | FK → job_levels.job_level_id |
+| max_job_level_id | tinyint unsigned | no | FK → job_levels.job_level_id |
+
+**`performance_rating_levels`** — Performance rating scale with salary-hike guideline (findings F4, F12)
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| rating_id | tinyint unsigned | no | PK |
+| rating_label | varchar(20) | no | UQ |
+| hike_min_pct | decimal(5,2) | no |  |
+| hike_max_pct | decimal(5,2) | no |  |
+
+**`performance_reviews`** — One annual performance review per employee
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| review_id | int unsigned | no | PK · auto-increment |
+| employee_id | int unsigned | no | UQ (employee_id, review_year) · FK → employees.employee_id |
+| review_year | smallint unsigned | no | UQ (employee_id, review_year) |
+| review_date | date | no |  |
+| reviewer_id | int unsigned | no | FK → employees.employee_id |
+| project_id | smallint unsigned | yes | FK → projects.project_id |
+| rating_id | tinyint unsigned | no | FK → performance_rating_levels.rating_id |
+| kpi_score | decimal(5,2) | no |  |
+| training_sessions | tinyint unsigned | no |  |
+| overtime_flag | tinyint(1) | no |  |
+| comments | varchar(500) | yes |  |
+| created_at | datetime | no | default: time of insert |
+
+**`project_assignments`** — Employee-to-project allocation (resolves M:N)
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| assignment_id | int unsigned | no | PK · auto-increment |
+| employee_id | int unsigned | no | UQ (employee_id, project_id, start_date) · FK → employees.employee_id |
+| project_id | smallint unsigned | no | UQ (employee_id, project_id, start_date) · FK → projects.project_id |
+| project_role | varchar(30) | no |  |
+| allocation_pct | tinyint unsigned | no |  |
+| start_date | date | no | UQ (employee_id, project_id, start_date) |
+| end_date | date | yes |  |
+| created_at | datetime | no | default: time of insert |
+
+**`projects`** — Projects; planned vs actual end enables delay analysis
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| project_id | smallint unsigned | no | PK · auto-increment |
+| project_code | char(8) | no | UQ |
+| project_name | varchar(120) | no |  |
+| description | varchar(500) | yes |  |
+| department_id | tinyint unsigned | no | FK → departments.department_id |
+| project_manager_id | int unsigned | yes | FK → employees.employee_id |
+| start_date | date | no |  |
+| planned_end_date | date | no |  |
+| actual_end_date | date | yes |  |
+| budget | decimal(14,2) | no |  |
+| status | varchar(15) | no |  |
+| priority | varchar(10) | no |  |
+| created_at | datetime | no | default: time of insert |
+| updated_at | datetime | no | default: time of insert |
+
+### Data warehouse `hr_dw` (star schema + ETL log)
+
+**`dim_date`** — Calendar and Indian fiscal-year attributes, 2015-2030
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| date_sk | int | no | PK |
+| full_date | date | no | UQ |
+| day_of_month | tinyint unsigned | no |  |
+| day_name | varchar(9) | no |  |
+| day_of_week | tinyint unsigned | no |  |
+| is_weekend | tinyint(1) | no |  |
+| week_of_year | tinyint unsigned | no |  |
+| month_number | tinyint unsigned | no |  |
+| month_name | varchar(9) | no |  |
+| quarter_number | tinyint unsigned | no |  |
+| quarter_label | char(2) | no |  |
+| calendar_year | smallint unsigned | no |  |
+| year_month_label | char(7) | no |  |
+| fiscal_year | char(9) | no |  |
+| fiscal_quarter | char(2) | no |  |
+
+**`dim_department`** — SCD Type 1
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| department_sk | int | no | PK · auto-increment |
+| department_id | tinyint unsigned | no | UQ |
+| department_code | varchar(10) | no |  |
+| department_name | varchar(60) | no |  |
+| updated_at | datetime | no | default: time of insert |
+
+**`dim_employee`** — SCD Type 2 employee dimension
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| employee_sk | int | no | PK · auto-increment |
+| employee_id | int unsigned | no | UQ (employee_id, start_date) · UQ (employee_id, version_number) |
+| employee_code | char(9) | no |  |
+| full_name | varchar(101) | no |  |
+| gender | varchar(10) | no |  |
+| date_of_birth | date | no |  |
+| marital_status | varchar(10) | no |  |
+| education_level | varchar(30) | no |  |
+| education_field | varchar(60) | no |  |
+| distance_from_home_km | tinyint unsigned | no |  |
+| prior_experience_years | tinyint unsigned | no |  |
+| prior_companies_count | tinyint unsigned | no |  |
+| hire_date | date | no |  |
+| exit_date | date | yes |  |
+| exit_reason | varchar(60) | yes |  |
+| is_voluntary_exit | tinyint(1) | yes |  |
+| attrition_flag | tinyint(1) | no |  |
+| department_code | varchar(10) | no |  |
+| department_name | varchar(60) | no |  |
+| job_role | varchar(60) | no |  |
+| job_level | tinyint unsigned | no |  |
+| job_level_title | varchar(30) | no |  |
+| manager_employee_id | int unsigned | yes |  |
+| manager_name | varchar(101) | yes |  |
+| monthly_income | decimal(10,2) | no |  |
+| salary_band | varchar(20) | no |  |
+| stock_option_level | tinyint unsigned | no |  |
+| business_travel | varchar(20) | no |  |
+| change_reason | varchar(20) | no |  |
+| start_date | date | no | UQ (employee_id, start_date) |
+| end_date | date | no |  |
+| is_current | tinyint(1) | no |  |
+| version_number | smallint unsigned | no | UQ (employee_id, version_number) |
+| row_hash | char(32) | no |  |
+| current_version_key | int unsigned | yes | UQ · *generated* |
+| etl_batch_id | int | no |  |
+| loaded_at | datetime | no | default: time of insert |
+| updated_at | datetime | no | default: time of insert |
+
+**`dim_project`** — SCD Type 1, flattened; special member (sk -1, id 0) for reviews without a project
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| project_sk | int | no | PK · auto-increment |
+| project_id | smallint unsigned | no | UQ |
+| project_code | char(8) | no |  |
+| project_name | varchar(120) | no |  |
+| owning_department_name | varchar(60) | no |  |
+| project_manager_name | varchar(101) | yes |  |
+| start_date | date | yes |  |
+| planned_end_date | date | yes |  |
+| actual_end_date | date | yes |  |
+| planned_duration_days | smallint | yes |  |
+| delay_days | smallint | yes |  |
+| is_delayed | tinyint(1) | yes |  |
+| status | varchar(15) | no |  |
+| priority | varchar(10) | no |  |
+| budget | decimal(14,2) | yes |  |
+| budget_band | varchar(20) | no |  |
+| updated_at | datetime | no | default: time of insert |
+
+**`etl_batch_log`** — One row per ETL step per run
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| log_id | int | no | PK · auto-increment |
+| batch_id | int | no |  |
+| step_name | varchar(60) | no |  |
+| rows_affected | int | no |  |
+| status | varchar(10) | no |  |
+| message | varchar(500) | yes |  |
+| started_at | datetime | no | default: time of insert |
+| finished_at | datetime | yes |  |
+
+**`etl_rejected_rows`** — Source rows the ETL could not load, with the reason
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| reject_id | int | no | PK · auto-increment |
+| batch_id | int | no |  |
+| source_table | varchar(60) | no |  |
+| source_key | varchar(60) | no |  |
+| reason | varchar(255) | no |  |
+| rejected_at | datetime | no | default: time of insert |
+
+**`fact_performance_reviews`** — Grain: one row per performance review
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| review_id | int unsigned | no | PK |
+| date_sk | int | no | FK → dim_date.date_sk |
+| employee_sk | int | no | FK → dim_employee.employee_sk |
+| department_sk | int | no | FK → dim_department.department_sk |
+| project_sk | int | no | FK → dim_project.project_sk |
+| performance_rating | tinyint unsigned | no |  |
+| kpi_score | decimal(5,2) | no |  |
+| training_sessions | tinyint unsigned | no |  |
+| overtime_flag | tinyint unsigned | no |  |
+| monthly_income_at_review | decimal(10,2) | no |  |
+| environment_satisfaction | tinyint unsigned | yes |  |
+| job_satisfaction | tinyint unsigned | yes |  |
+| relationship_satisfaction | tinyint unsigned | yes |  |
+| work_life_balance | tinyint unsigned | yes |  |
+| job_involvement | tinyint unsigned | yes |  |
+| etl_batch_id | int | no |  |
+| loaded_at | datetime | no | default: time of insert |
+
+### Staging `hr_staging` (raw landing zone, no constraints)
+
+**`stg_assignments`** — Project assignments (raw)
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| stg_row_id | int unsigned | no | PK · auto-increment |
+| batch_id | int | no |  |
+| employee_code | varchar(12) | yes |  |
+| project_code | varchar(12) | yes |  |
+| project_role | varchar(30) | yes |  |
+| allocation_pct | int | yes |  |
+| start_date | date | yes |  |
+| end_date | date | yes |  |
+| loaded_at | datetime | no | default: time of insert |
+
+**`stg_employees`** — Scaled IBM dataset (raw, unvalidated)
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| stg_row_id | int unsigned | no | PK · auto-increment |
+| batch_id | int | no |  |
+| source_employee_number | int | yes |  |
+| employee_code | varchar(12) | yes |  |
+| first_name | varchar(50) | yes |  |
+| last_name | varchar(50) | yes |  |
+| email | varchar(120) | yes |  |
+| phone | varchar(25) | yes |  |
+| date_of_birth | date | yes |  |
+| hire_date | date | yes |  |
+| exit_date | date | yes |  |
+| exit_reason | varchar(60) | yes |  |
+| age | int | yes |  |
+| attrition | varchar(5) | yes |  |
+| business_travel | varchar(25) | yes |  |
+| daily_rate | int | yes |  |
+| department | varchar(60) | yes |  |
+| distance_from_home | int | yes |  |
+| education | int | yes |  |
+| education_field | varchar(60) | yes |  |
+| employee_count | int | yes |  |
+| environment_satisfaction | int | yes |  |
+| gender | varchar(10) | yes |  |
+| hourly_rate | int | yes |  |
+| job_involvement | int | yes |  |
+| job_level | int | yes |  |
+| job_role | varchar(60) | yes |  |
+| job_satisfaction | int | yes |  |
+| marital_status | varchar(15) | yes |  |
+| monthly_income | decimal(10,2) | yes |  |
+| monthly_rate | int | yes |  |
+| num_companies_worked | int | yes |  |
+| over18 | varchar(3) | yes |  |
+| over_time | varchar(5) | yes |  |
+| percent_salary_hike | int | yes |  |
+| performance_rating | int | yes |  |
+| relationship_satisfaction | int | yes |  |
+| standard_hours | int | yes |  |
+| stock_option_level | int | yes |  |
+| total_working_years | int | yes |  |
+| training_times_last_year | int | yes |  |
+| work_life_balance | int | yes |  |
+| years_at_company | int | yes |  |
+| years_in_current_role | int | yes |  |
+| years_since_last_promotion | int | yes |  |
+| years_with_curr_manager | int | yes |  |
+| loaded_at | datetime | no | default: time of insert |
+
+**`stg_job_history`** — Job versions (raw)
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| stg_row_id | int unsigned | no | PK · auto-increment |
+| batch_id | int | no |  |
+| employee_code | varchar(12) | yes |  |
+| version_number | int | yes |  |
+| department | varchar(60) | yes |  |
+| job_role | varchar(60) | yes |  |
+| job_level | int | yes |  |
+| manager_code | varchar(12) | yes |  |
+| monthly_income | decimal(10,2) | yes |  |
+| stock_option_level | int | yes |  |
+| business_travel | varchar(25) | yes |  |
+| change_reason | varchar(25) | yes |  |
+| effective_start_date | date | yes |  |
+| effective_end_date | date | yes |  |
+| loaded_at | datetime | no | default: time of insert |
+
+**`stg_projects`** — Projects (raw)
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| stg_row_id | int unsigned | no | PK · auto-increment |
+| batch_id | int | no |  |
+| project_code | varchar(12) | yes |  |
+| project_name | varchar(120) | yes |  |
+| description | varchar(500) | yes |  |
+| department | varchar(60) | yes |  |
+| project_manager_code | varchar(12) | yes |  |
+| start_date | date | yes |  |
+| planned_end_date | date | yes |  |
+| actual_end_date | date | yes |  |
+| budget | decimal(14,2) | yes |  |
+| status | varchar(15) | yes |  |
+| priority | varchar(10) | yes |  |
+| loaded_at | datetime | no | default: time of insert |
+
+**`stg_reviews`** — Performance reviews (raw)
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| stg_row_id | int unsigned | no | PK · auto-increment |
+| batch_id | int | no |  |
+| employee_code | varchar(12) | yes |  |
+| review_year | int | yes |  |
+| review_date | date | yes |  |
+| reviewer_code | varchar(12) | yes |  |
+| project_code | varchar(12) | yes |  |
+| performance_rating | int | yes |  |
+| kpi_score | decimal(5,2) | yes |  |
+| training_sessions | int | yes |  |
+| over_time | varchar(5) | yes |  |
+| comments | varchar(500) | yes |  |
+| loaded_at | datetime | no | default: time of insert |
+
+**`stg_surveys`** — Engagement surveys (raw)
+
+| Column | Type | Null? | Keys and connections |
+|---|---|---|---|
+| stg_row_id | int unsigned | no | PK · auto-increment |
+| batch_id | int | no |  |
+| employee_code | varchar(12) | yes |  |
+| survey_date | date | yes |  |
+| environment_satisfaction | int | yes |  |
+| job_satisfaction | int | yes |  |
+| relationship_satisfaction | int | yes |  |
+| job_involvement | int | yes |  |
+| work_life_balance | int | yes |  |
+| loaded_at | datetime | no | default: time of insert |
+
