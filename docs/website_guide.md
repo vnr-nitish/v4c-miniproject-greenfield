@@ -208,18 +208,25 @@ saved and what you typed stays in the form, so you can correct it.
 
 ## 5. Employee 360 · job change
 
-**Find someone:** type an employee code, or click one of the **example** chips (active employees
-with the longest history). The header shows department, role and level, income, tenure and the
-number of SCD Type 2 versions.
+**Find someone:** type a name, an e-mail, a phone number or an employee ID (any part of a name,
+e-mail or phone number will do), or click one of the **example** chips (active employees with the
+longest history). People who left are found too. One match, or one exact match, opens straight
+away; several matches are listed, and clicking a row opens that person. The made-up data has about
+5,000 different phone numbers for 100,000 people, so a phone search usually lists about 20 people.
 
-**Tab "Career timeline":** one bar per job version on a time axis, coloured by department, plus
-the version table straight from the warehouse (`dim_employee`: version number, department,
-role, level, income, change reason, start and end dates, current flag).
+**Tab "Details":** the current position, employment, contact and personal details, and background.
 
-**Tab "Change position"** (the Phase 4 SCD Type 2 requirement):
-- The same position picker as onboarding, pre-filled with the current job. You can change the
-  **department** (only roles that department offers become selectable), **role**, **level**,
-  **monthly income**, **manager**, **stock options** and **travel**.
+**Tab "Career timeline":** the version table straight from the warehouse (`dim_employee`: version
+number, department, role, level, income, change reason, start and end dates, current flag).
+
+**Tab "Update", part "Personal details":** correct the name, contact details, gender, date of birth,
+marital status, education, distance from home and prior experience (SCD Type 1: the warehouse
+overwrites them on every version). The hire date and exit have their own rules and are not here.
+
+**Tab "Update", part "Position"** (the Phase 4 SCD Type 2 requirement):
+- The same position picker as onboarding, pre-filled with the current job, so a field you don't
+  touch stays as it is. You can change the **department** (only roles that department offers become
+  selectable), **role**, **level**, **monthly income**, **manager**, **stock options** and **travel**.
 - **Effective date:** today or earlier, after the current version started; at most one change per
   employee per day. **Reason:** pick one or leave "Derive automatically" — then Promotion (level up) >
   Transfer (department) > Role Change > Manager Change > Salary Revision.
@@ -232,16 +239,20 @@ role, level, income, change reason, start and end dates, current flag).
   - Warehouse (`sp_scd2_apply_employee`): the current `dim_employee` row is **expired**
     (end date = the day before, `is_current = 0`) and a **new current row** is inserted (start =
     effective date, end 9999-12-31, version number + 1).
-  - The page shows the **expired** row (red) and the **new** row (green) side by side, and the
-    timeline with the new bar.
+  - A pop-up shows the **expired** row and the **new** row. OK closes it, and the page shows the new
+    position.
 - **What you get afterwards:** reviews from the effective date on link to the new version (earlier
   reviews keep the old one, so history stays true); department analytics count the person in the
   new department from that day; the attrition-risk score reflects the new level, pay or stock on
   the dashboards' next refresh (immediately, because the page tells the analytics cache).
 
-**Tab "Reviews · projects · exit":** the person's reviews and project assignments; **Record an
-exit** (date and reason) — `sp_record_exit` ends their open assignments and the warehouse marks
-every version as a leaver (attrition flag, exit date). People who left cannot change jobs.
+**Tab "Reviews & projects":** the person's reviews and project assignments, to read.
+
+**Tab "Exit":** record the exit date and reason — `sp_record_exit` ends their open assignments and
+the warehouse marks every version as a leaver (attrition flag, exit date). People who left cannot
+change anything; this tab then shows when and why they left.
+
+Everything except the Update and Exit forms is open without the passcode.
 
 ## 6. Projects
 
@@ -331,7 +342,7 @@ at once and reach the dashboards after the next ETL run.
 **Why 83,878 and not 100,000 on the headcount tile?** The tile counts active employees; 16,122 left
 (the IBM attrition rate) and are kept for history.
 
-**Where is SCD Type 2 visible?** Employee 360 → Change position shows the expired and the new
+**Where is SCD Type 2 visible?** Employee 360 → Update → Position shows the expired and the new
 warehouse row; the career timeline shows every version.
 
 **Why does a new review not show on the dashboards at once?** The warehouse is loaded in batches;
