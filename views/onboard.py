@@ -8,7 +8,7 @@ from src.models import Employee, Position
 from src.ui.common import announce, attempt, data_changed, editor_unlocked, page_header, show_announcement
 from src.ui.forms import position_picker
 
-page_header("Onboard an employee", "Validated as you go; the new hire appears in the warehouse immediately")
+page_header("Onboard an employee")
 if not editor_unlocked():
     st.stop()
 ref = ReferenceDataManager()

@@ -339,7 +339,6 @@ class AnalyticsManager(DatabaseConnection):
             for step in (self.yoy_trends, self.attrition_trend, self.overview, self.scored_workforce,
                          lambda: self.bottleneck_projects(limit=500),
                          self.project_delivery, lambda: self.yoy_trends(by_department=True),
-                         lambda: self.role_trends(metric="overtime_pct"),
                          lambda: self.top_performers(AnalyticsFilter(fiscal_years=cycles), top_n=5, min_reviews=2),
                          self.risk_backtest):
                 step()
@@ -491,27 +490,6 @@ class AnalyticsManager(DatabaseConnection):
             WINDOW w AS ({partition}ORDER BY period)
             ORDER BY {'department_name, ' if by_department else ''}period"""
         return self._cached(("yoy_trends", filters, period, by_department), lambda: self.fetch_frame(sql, params))
-
-    ROLE_METRICS = {"kpi": "AVG(f.kpi_score)", "outstanding_pct": "100 * AVG(f.performance_rating = 4)",
-                    "overtime_pct": "100 * AVG(f.overtime_flag)", "job_satisfaction": "AVG(f.job_satisfaction)",
-                    "training_sessions": "AVG(f.training_sessions)"}
-
-    def role_trends(self, filters: AnalyticsFilter = AnalyticsFilter(), metric: str = "overtime_pct") -> pd.DataFrame:
-        """One metric per job role (as held at review time) and review cycle — the 3D trend surface."""
-        if metric not in self.ROLE_METRICS:
-            raise ValidationError({"metric": f"Metric must be one of {', '.join(self.ROLE_METRICS)}"})
-        where, params = filters.where("dd.department_name", "de.job_level", "d.fiscal_year")
-        sql = f"""
-            SELECT de.job_role, d.fiscal_year AS period, ROUND({self.ROLE_METRICS[metric]}, 2) AS value,
-                   COUNT(*) AS reviews
-            FROM hr_dw.fact_performance_reviews f
-            JOIN hr_dw.dim_date d        ON d.date_sk = f.date_sk
-            JOIN hr_dw.dim_department dd ON dd.department_sk = f.department_sk
-            JOIN hr_dw.dim_employee de   ON de.employee_sk = f.employee_sk
-            WHERE 1 = 1 {where}
-            GROUP BY de.job_role, d.fiscal_year
-            ORDER BY de.job_role, d.fiscal_year"""
-        return self._cached(("role_trends", filters, metric), lambda: self.fetch_frame(sql, params))
 
     def attrition_trend(self, filters: AnalyticsFilter = AnalyticsFilter(),
                         by_department: bool = False) -> pd.DataFrame:

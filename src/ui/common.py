@@ -14,10 +14,9 @@ from src.ui.forms import _manager_candidates
 from src.ui.theme import TILE_COLORS, inject_css
 
 
-def page_header(title: str, subtitle: str = "") -> None:
+def page_header(title: str) -> None:
     inject_css()
-    line = f"<p>{subtitle}</p>" if subtitle else ""
-    st.markdown(f"<div class='hero'><h1>{title}</h1>{line}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='hero'><h1>{title}</h1></div>", unsafe_allow_html=True)
 
 
 def note(text: str) -> None:

@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 from streamlit.testing.v1 import AppTest
 
-from src.dal import AnalyticsManager, EmployeeManager, ReferenceDataManager
+from src.dal import AnalyticsManager, EmployeeManager, ProjectManager, ReferenceDataManager
 from src.dal.employee_manager import PositionChange
 from src.db_manager import DatabaseConnection
 from src.exceptions import DatabaseError, HRAppError, PoolBusyError
@@ -318,6 +318,101 @@ def test_employee_360_keeps_a_leaver_read_only(monkeypatch):
     assert any("can no longer change" in i.value for i in at.tabs[2].info)
     assert any("left on" in i.value for i in at.tabs[4].info)
     assert not [button for button in at.button if button.label in ("Apply change", "Record exit")]
+
+
+@pytest.mark.parametrize("page", PAGES)
+def test_page_headings_have_no_line_under_them(page, monkeypatch):
+    at = AppTest.from_file(f"../views/{page}.py", default_timeout=180).run()
+    heading = next(m.value for m in at.markdown if "class='hero'" in m.value)
+    assert "<p>" not in heading
+
+
+# ----------------------------------------------------------------------------- Projects
+
+def projects_page(monkeypatch) -> AppTest:
+    monkeypatch.delenv("APP_PASSCODE", raising=False)
+    at = AppTest.from_file("../views/projects.py", default_timeout=180).run()
+    assert not at.exception, at.exception
+    return at
+
+
+def look_up(at: AppTest, code: str) -> None:
+    next(field for field in at.text_input if field.label == "Project code").input(code)
+    press(at, "Submit")
+
+
+def active_project():
+    return ProjectManager().search(status="Active", limit=1).iloc[0]
+
+
+def test_projects_has_four_tabs_and_a_dashboard_without_row_selection(monkeypatch):
+    at = projects_page(monkeypatch)
+    assert [tab.label for tab in at.tabs] == ["Dashboard", "Project details", "Create", "Assign people"]
+    assert len(at.tabs[0].dataframe) == 1
+    assert not any(m.value.startswith("### ") for m in at.tabs[1].markdown)      # nothing until Submit
+
+
+def test_project_details_appear_after_submit_and_change_with_the_next_code(monkeypatch):
+    first, second = ProjectManager().search(status="Active", limit=2).project_code
+    at = projects_page(monkeypatch)
+    look_up(at, first)
+    assert any(first in m.value for m in at.tabs[1].markdown if m.value.startswith("### "))
+    assert len(at.tabs[1].dataframe) == 1                                        # the team
+    look_up(at, second)
+    assert any(second in m.value for m in at.tabs[1].markdown if m.value.startswith("### "))
+
+
+def test_project_details_say_when_the_code_is_unknown(monkeypatch):
+    at = projects_page(monkeypatch)
+    look_up(at, "PRJ99999")
+    assert any("PRJ99999 not found" in w.value for w in at.warning)
+
+
+def test_project_is_edited_and_closed_in_a_pop_up(monkeypatch):
+    saved = []
+    monkeypatch.setattr(ProjectManager, "update", lambda self, project: saved.append(project) or project)  # nothing written
+    at = projects_page(monkeypatch)
+    look_up(at, active_project().project_code)
+    next(field for field in at.text_input if field.label == "Project name").input("Renamed")
+    press(at, "Save changes")
+    assert saved[-1].project_name == "Renamed" and any("was updated" in s.value for s in at.success)
+    at.button(key="announcement_ok").click().run()
+    assert not at.exception, at.exception
+    next(box for box in at.button_group if box.label == "What do you want to do?").set_value("Close project").run()
+    press(at, "Close project")
+    assert saved[-1].status == "Completed" and saved[-1].actual_end_date == date.today()
+    assert any("was closed" in s.value for s in at.success)
+
+
+def test_a_new_project_is_created_with_its_department_in_the_same_box(monkeypatch):
+    made = []
+    monkeypatch.setattr(ProjectManager, "create", lambda self, project: made.append(project) or
+                        project.with_changes(project_id=1, project_code="PRJ00001"))                      # nothing written
+    at = projects_page(monkeypatch)
+    at.selectbox(key="create_department_0").set_value(3).run()                   # Sales: the managers follow
+    assert not at.exception, at.exception
+    at.text_input(key="create_name_0").input("New platform")
+    press(at, "Create project")
+    assert made[0].department_id == 3 and made[0].project_name == "New platform" and made[0].priority == "Medium"
+    assert any("PRJ00001" in s.value for s in at.success)
+    assert at.text_input(key="create_name_1").value == ""                        # the next form is empty
+
+
+# ----------------------------------------------------------------------------- Trends and top performers
+
+def test_trends_has_one_chart_and_no_heatmap(monkeypatch):
+    at = AppTest.from_file("../views/trends.py", default_timeout=180).run()
+    assert not at.exception, at.exception
+    assert len(at.get("plotly_chart")) == 1
+    assert len(at.dataframe) == 1 and not at.get("pills")
+
+
+def test_top_performers_is_only_a_table_with_plus_and_minus_boxes():
+    at = AppTest.from_file("../views/top_performers.py", default_timeout=180).run()
+    assert not at.exception, at.exception
+    assert not at.get("plotly_chart") and not at.toggle and not at.slider and not at.expander
+    assert [box.label for box in at.number_input] == ["Ranks per department", "Minimum reviews"]
+    assert len(at.dataframe) == 1
 
 
 def test_fact_cards_escape_what_users_typed(monkeypatch):

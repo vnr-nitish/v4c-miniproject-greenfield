@@ -7,7 +7,7 @@ import streamlit as st
 from src.dal import AnalyticsManager, EtlManager
 from src.ui.common import attempt, data_changed, editor_unlocked, page_header
 
-page_header("ETL & data health", "Run the stored-procedure ETL (OLTP → star schema) and read its audit trail")
+page_header("ETL & data health")
 etl, am = EtlManager(), AnalyticsManager()
 version = attempt(am.data_version)
 if version:

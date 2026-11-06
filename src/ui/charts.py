@@ -47,7 +47,7 @@ def lines(frame: pd.DataFrame, x: str, y: str, color: str | None = None, title: 
     fig = px.line(frame, x=x, y=y, color=color, markers=True, color_discrete_map=theme.DEPARTMENT_COLORS,
                   line_shape="spline")
     fig.update_traces(line=dict(width=3), marker=dict(size=8))
-    fig.update_layout(hovermode="x unified", legend_title_text="")
+    fig.update_layout(hovermode="x unified", legend_title_text="", xaxis_title=None, yaxis_title=None)
     return _finish(fig, 380, title)
 
 
@@ -66,21 +66,6 @@ def bars(frame: pd.DataFrame, x: str, y: str, color: str | None = None, horizont
         fig.update_xaxes(tickmode="array", tickvals=names, tickangle=0,
                          ticktext=[textwrap.fill(str(name), 14).replace("\n", "<br>") for name in names])
     return _finish(fig, 380, title)
-
-
-def leaderboard(top: pd.DataFrame) -> go.Figure:
-    """Best people per department: one bar each, labelled with their rank."""
-    data = top.sort_values(["department_name", "department_rank", "avg_kpi"], ascending=[True, False, True])
-    data = data.assign(label="#" + data.department_rank.astype(str) + "  " + data.full_name)
-    fig = px.bar(data, x="avg_kpi", y="label", color="department_name", orientation="h", facet_col="department_name",
-                 facet_col_spacing=.14, color_discrete_map=theme.DEPARTMENT_COLORS,
-                 hover_data={"avg_rating": ":.2f", "reviews": True, "label": False})
-    fig.update_yaxes(matches=None, showticklabels=True, title=None)
-    fig.update_xaxes(title=None, range=[max(0, data.avg_kpi.min() - 5), 100])
-    fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
-    fig.update_traces(marker=dict(cornerradius=5))
-    fig.update_layout(showlegend=False)
-    return _finish(fig, 120 + 26 * data.groupby("department_name").size().max(), "Average KPI of the top-ranked people")
 
 
 def bubbles(projects: pd.DataFrame) -> go.Figure:
