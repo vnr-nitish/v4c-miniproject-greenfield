@@ -3,4 +3,5 @@
 import runpy
 from pathlib import Path
 
+# run app.py as if it were started directly; Streamlit Cloud looks for a file with this name
 runpy.run_path(str(Path(__file__).with_name("app.py")), run_name="__main__")

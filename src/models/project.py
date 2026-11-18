@@ -8,6 +8,7 @@ from decimal import Decimal
 
 from src.models.base import Entity, Rules, as_date, as_decimal, in_range, is_date, is_int, is_text
 
+# The allowed values, the same as the database's CHECK constraints.
 PROJECT_STATUSES = ("Planned", "Active", "On Hold", "Completed", "Cancelled")
 CLOSED_STATUSES = ("Completed", "Cancelled")
 PRIORITIES = ("Low", "Medium", "High", "Critical")
@@ -15,6 +16,7 @@ PRIORITIES = ("Low", "Medium", "High", "Critical")
 _CODE = re.compile(r"PRJ\d{5}")
 
 
+# OOP (Inheritance): mirrors hr_oltp.projects and validates itself like every Entity.
 @dataclass(frozen=True)
 class Project(Entity):
     """A project owned by a department; planned vs actual end makes delays measurable."""
@@ -32,6 +34,7 @@ class Project(Entity):
     project_id: int | None = None
     project_code: str | None = None
 
+    # Tidy the input: trim the name, an empty description becomes None, money and dates get the right types.
     def _normalize(self) -> None:
         if isinstance(self.project_name, str):
             self._set("project_name", self.project_name.strip())
@@ -41,6 +44,7 @@ class Project(Entity):
         for name in ("start_date", "planned_end_date", "actual_end_date"):
             self._set(name, as_date(getattr(self, name)))
 
+    # Project rules: code format, name length, positive budget, valid status and priority, no end before the start.
     def validation_errors(self) -> dict[str, str]:
         r = Rules()
         r.require(self.project_code is None or (isinstance(self.project_code, str)
@@ -66,16 +70,19 @@ class Project(Entity):
         if is_date(self.actual_end_date) and is_date(self.start_date):
             r.require(self.actual_end_date >= self.start_date, "actual_end_date",
                       "The actual end cannot be before the start")
+        # a closed project must have an actual end date, and an open one must not
         r.require((self.status in CLOSED_STATUSES) == (self.actual_end_date is not None), "actual_end_date",
                   "Completed and cancelled projects need an actual end date; open projects have none")
         return r.errors
 
     # ------------------------------------------------------------------ behaviour
 
+    # True when the project is Completed or Cancelled.
     @property
     def is_closed(self) -> bool:
         return self.status in CLOSED_STATUSES
 
+    # Days from the start to the planned end.
     @property
     def planned_duration_days(self) -> int:
         return (self.planned_end_date - self.start_date).days
@@ -98,6 +105,7 @@ class Project(Entity):
         return self.with_changes(status=status, actual_end_date=on)
 
 
+# One row of hr_oltp.project_assignments: an employee working on a project for a period.
 @dataclass(frozen=True)
 class Assignment(Entity):
     """An employee allocated to a project for a period (allocation in % of their time)."""
@@ -110,12 +118,14 @@ class Assignment(Entity):
     end_date: date | None = None
     assignment_id: int | None = None
 
+    # Trim the role; datetimes to dates.
     def _normalize(self) -> None:
         if isinstance(self.project_role, str):
             self._set("project_role", self.project_role.strip())
         self._set("start_date", as_date(self.start_date))
         self._set("end_date", as_date(self.end_date))
 
+    # Assignment rules: employee and project chosen, a role, 1-100 % allocation, no end before the start.
     def validation_errors(self) -> dict[str, str]:
         r = Rules()
         r.require(is_int(self.employee_id) and self.employee_id >= 1, "employee_id", "Choose an employee")
@@ -131,12 +141,15 @@ class Assignment(Entity):
 
     # ------------------------------------------------------------------ behaviour
 
+    # True while the assignment has no end date.
     @property
     def is_open(self) -> bool:
         return self.end_date is None
 
+    # True if the assignment runs on that day.
     def active_on(self, day: date) -> bool:
         return self.start_date <= day and (self.end_date is None or day <= self.end_date)
 
+    # A copy of the assignment that ends on that day.
     def end(self, on: date) -> "Assignment":
         return self.with_changes(end_date=on)

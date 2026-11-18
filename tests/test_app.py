@@ -3,6 +3,8 @@
 Read-only: no test presses a button that writes. The analytics cache is shared with the test
 process, so the slow warehouse queries run once.
 """
+# How to read this file: each 'test_' function is one check that pytest runs; 'assert X' means X must be true.
+# A parameter such as 'cur' is a fixture, prepared first by a function marked @pytest.fixture.
 from datetime import date
 
 import pandas as pd
@@ -20,6 +22,7 @@ PAGES = ["overview", "trends", "top_performers", "attrition", "bottlenecks", "op
          "onboard", "employee_360", "projects", "reviews"]
 
 
+# Fixture 'database': prepared by pytest and handed to every test with a parameter of this name.
 @pytest.fixture(scope="module", autouse=True)
 def database():
     try:
@@ -28,12 +31,14 @@ def database():
         pytest.skip(f"MySQL not available: {err}")
 
 
+# Test: page renders.
 @pytest.mark.parametrize("page", PAGES)
 def test_page_renders(page):
     at = AppTest.from_file(f"../views/{page}.py", default_timeout=180).run()
     assert not at.exception, at.exception
 
 
+# Test: app shell renders.
 def test_app_shell_renders():
     at = AppTest.from_file("../app.py", default_timeout=180).run()
     assert not at.exception, at.exception
@@ -71,6 +76,7 @@ def test_a_busy_database_keeps_the_pool_everyone_shares(monkeypatch):
     assert not resets
 
 
+# Test: an unreachable database shows what to check.
 def test_an_unreachable_database_shows_what_to_check(monkeypatch):
     resets = []
     monkeypatch.setattr(DatabaseConnection, "reset", lambda: resets.append(1))
@@ -81,6 +87,7 @@ def test_an_unreachable_database_shows_what_to_check(monkeypatch):
     assert resets
 
 
+# Test: a problem no page handled is a message not a crash.
 @pytest.mark.parametrize("error, shown", [(PoolBusyError("connections are busy"), "warning"),
                                           (DatabaseError("connection lost"), "error")])
 def test_a_problem_no_page_handled_is_a_message_not_a_crash(error, shown, monkeypatch):
@@ -90,6 +97,7 @@ def test_a_problem_no_page_handled_is_a_message_not_a_crash(error, shown, monkey
     assert any(str(error) in element.value for element in getattr(at, shown))
 
 
+# Test: invalid onboarding shows field errors.
 def test_invalid_onboarding_shows_field_errors():
     at = AppTest.from_file("../views/onboard.py", default_timeout=180).run()
     at.text_input[0].input("Asha2").run()            # invalid first name, other fields empty
@@ -115,6 +123,7 @@ def type_a_person(at) -> None:
         field.input(typed[field.label])
 
 
+# Test: onboarding shows a pop up and then an empty form.
 def test_onboarding_shows_a_pop_up_and_then_an_empty_form(monkeypatch):
     at, existing, saved = onboarding_form(monkeypatch)
     type_a_person(at)
@@ -152,6 +161,7 @@ def test_each_position_choice_still_narrows_the_next_fields(monkeypatch):
     assert saved and (saved[0].department_id, saved[0].stock_option_level) == (3, 2)
 
 
+# Test: invalid onboarding keeps what was typed.
 def test_invalid_onboarding_keeps_what_was_typed(monkeypatch):
     at, _, saved = onboarding_form(monkeypatch)
     type_a_person(at)
@@ -186,11 +196,13 @@ def press(at: AppTest, label: str) -> None:
     assert not at.exception, at.exception
 
 
+# Test: employee 360 starts with only the search.
 def test_employee_360_starts_with_only_the_search():
     at = employee_page("")
     assert not at.tabs and at.text_input(key="e360_search").value == ""
 
 
+# Test: employee 360 opens on an exact search.
 @pytest.mark.parametrize("field", ["employee_code", "email", "employee_id"])
 def test_employee_360_opens_on_an_exact_search(field):
     employee = long_career()
@@ -204,6 +216,7 @@ def test_employee_360_opens_on_an_exact_search(field):
     assert len(at.tabs[3].dataframe) == 2                                  # reviews and projects
 
 
+# Test: employee 360 lists several matches before opening one.
 def test_employee_360_lists_several_matches_before_opening_one():
     at = employee_page("an")
     assert not at.tabs and len(at.dataframe) == 1
@@ -216,11 +229,13 @@ def test_employee_360_lists_everyone_who_shares_a_phone_number():
     assert not at.tabs and len(at.dataframe) == 1
 
 
+# Test: employee 360 says when nobody matches.
 def test_employee_360_says_when_nobody_matches():
     at = employee_page("no such person")
     assert not at.tabs and any("No employee matches" in i.value for i in at.info)
 
 
+# Test: employee 360 updates personal details in a pop up.
 def test_employee_360_updates_personal_details_in_a_pop_up(monkeypatch):
     employee = long_career()
     saved = []
@@ -237,6 +252,7 @@ def test_employee_360_updates_personal_details_in_a_pop_up(monkeypatch):
     assert not at.exception, at.exception and not at.success
 
 
+# Test: employee 360 refuses invalid personal details.
 def test_employee_360_refuses_invalid_personal_details(monkeypatch):
     employee = long_career()
     saved = []
@@ -248,6 +264,7 @@ def test_employee_360_refuses_invalid_personal_details(monkeypatch):
     assert not saved and any("e-mail" in w.value for w in at.warning)
 
 
+# Test: employee 360 changes position in a pop up.
 def test_employee_360_changes_position_in_a_pop_up(monkeypatch):
     employee = long_career()
     history = EmployeeManager().history(employee.employee_id)
@@ -284,6 +301,7 @@ def test_a_position_change_starts_from_what_is_true_today(condition, monkeypatch
     assert sent[0].stock_option_level == current.stock_option_level
 
 
+# Test: employee 360 records an exit in a pop up.
 def test_employee_360_records_an_exit_in_a_pop_up(monkeypatch):
     employee = long_career()
     monkeypatch.setattr(EmployeeManager, "record_exit", lambda self, *args: 2)                      # nothing is written
@@ -292,6 +310,7 @@ def test_employee_360_records_an_exit_in_a_pop_up(monkeypatch):
     assert any("2 assignment(s) closed" in s.value for s in at.success)
 
 
+# Test: employee 360 keeps a leaver read only.
 def test_employee_360_keeps_a_leaver_read_only():
     code = DatabaseConnection().fetch_one("SELECT employee_code FROM hr_oltp.employees "
                                           "WHERE exit_date IS NOT NULL LIMIT 1")["employee_code"]
@@ -302,6 +321,7 @@ def test_employee_360_keeps_a_leaver_read_only():
     assert not [button for button in at.button if button.label in ("Apply change", "Record exit")]
 
 
+# Test: page headings have no line under them.
 @pytest.mark.parametrize("page", PAGES)
 def test_page_headings_have_no_line_under_them(page):
     at = AppTest.from_file(f"../views/{page}.py", default_timeout=180).run()
@@ -326,6 +346,7 @@ def active_project():
     return ProjectManager().search(status="Active", limit=1).iloc[0]
 
 
+# Test: projects has four tabs and a dashboard without row selection.
 def test_projects_has_four_tabs_and_a_dashboard_without_row_selection():
     at = projects_page()
     assert [tab.label for tab in at.tabs] == ["Dashboard", "Project details", "Create", "Assign people"]
@@ -333,6 +354,7 @@ def test_projects_has_four_tabs_and_a_dashboard_without_row_selection():
     assert not any(m.value.startswith("### ") for m in at.tabs[1].markdown)      # nothing until Submit
 
 
+# Test: project details appear after submit and change with the next code.
 def test_project_details_appear_after_submit_and_change_with_the_next_code():
     first, second = ProjectManager().search(status="Active", limit=2).project_code
     at = projects_page()
@@ -343,12 +365,14 @@ def test_project_details_appear_after_submit_and_change_with_the_next_code():
     assert any(second in m.value for m in at.tabs[1].markdown if m.value.startswith("### "))
 
 
+# Test: project details say when the code is unknown.
 def test_project_details_say_when_the_code_is_unknown():
     at = projects_page()
     look_up(at, "PRJ99999")
     assert any("PRJ99999 not found" in w.value for w in at.warning)
 
 
+# Test: project is edited and closed in a pop up.
 def test_project_is_edited_and_closed_in_a_pop_up(monkeypatch):
     saved = []
     monkeypatch.setattr(ProjectManager, "update", lambda self, project: saved.append(project) or project)  # nothing written
@@ -365,6 +389,7 @@ def test_project_is_edited_and_closed_in_a_pop_up(monkeypatch):
     assert any("was closed" in s.value for s in at.success)
 
 
+# Test: a new project is created with its department in the same box.
 def test_a_new_project_is_created_with_its_department_in_the_same_box(monkeypatch):
     made = []
     monkeypatch.setattr(ProjectManager, "create", lambda self, project: made.append(project) or
@@ -381,6 +406,7 @@ def test_a_new_project_is_created_with_its_department_in_the_same_box(monkeypatc
 
 # ----------------------------------------------------------------------------- Trends and top performers
 
+# Test: trends has one chart and no heatmap.
 def test_trends_has_one_chart_and_no_heatmap():
     at = AppTest.from_file("../views/trends.py", default_timeout=180).run()
     assert not at.exception, at.exception
@@ -388,6 +414,7 @@ def test_trends_has_one_chart_and_no_heatmap():
     assert len(at.dataframe) == 1 and not at.get("pills") and not at.expander   # the table is not folded away
 
 
+# Test: top performers has a table per department with plus and minus boxes.
 def test_top_performers_has_a_table_per_department_with_plus_and_minus_boxes():
     at = AppTest.from_file("../views/top_performers.py", default_timeout=180).run()
     assert not at.exception, at.exception
@@ -397,12 +424,14 @@ def test_top_performers_has_a_table_per_department_with_plus_and_minus_boxes():
     assert all(len(tab.dataframe) == 1 for tab in at.tabs)
 
 
+# Test: attrition has three charts and the table.
 def test_attrition_has_three_charts_and_the_table():
     at = AppTest.from_file("../views/attrition.py", default_timeout=180).run()
     assert not at.exception, at.exception
     assert len(at.get("plotly_chart")) == 3 and len(at.dataframe) == 1
 
 
+# Test: bottlenecks has two tabs with the completed projects in their own.
 def test_bottlenecks_has_two_tabs_with_the_completed_projects_in_their_own():
     at = AppTest.from_file("../views/bottlenecks.py", default_timeout=180).run()
     assert not at.exception, at.exception
@@ -410,6 +439,7 @@ def test_bottlenecks_has_two_tabs_with_the_completed_projects_in_their_own():
     assert len(at.tabs[1].get("plotly_chart")) == 2
 
 
+# Test: bottlenecks groups completed projects.
 @pytest.mark.parametrize("group", ["priority", "budget_band", "department", "year"])
 def test_bottlenecks_groups_completed_projects(group):
     at = AppTest.from_file("../views/bottlenecks.py", default_timeout=180).run()
@@ -424,6 +454,7 @@ def labels_of(at: AppTest) -> list[str]:
     return [box.label for box in at.selectbox if box.label in ("Department", "Job level")]
 
 
+# Test: each page has only the filters it needs.
 @pytest.mark.parametrize("page, filters", [("overview", ["Department"]), ("trends", ["Department", "Job level"]),
                                            ("top_performers", ["Job level"]), ("attrition", ["Department", "Job level"]),
                                            ("bottlenecks", ["Department"]), ("operations", [])])
@@ -439,18 +470,21 @@ def choose(at: AppTest, label: str, value) -> None:
     assert not at.exception, at.exception
 
 
+# Test: a department can be chosen.
 @pytest.mark.parametrize("page", ["overview", "trends", "attrition", "bottlenecks"])
 def test_a_department_can_be_chosen(page):
     at = AppTest.from_file(f"../views/{page}.py", default_timeout=180).run()
     choose(at, "Department", "Human Resources")
 
 
+# Test: a job level can be chosen.
 @pytest.mark.parametrize("page", ["trends", "top_performers", "attrition"])
 def test_a_job_level_can_be_chosen(page):
     at = AppTest.from_file(f"../views/{page}.py", default_timeout=180).run()
     choose(at, "Job level", 5)
 
 
+# Test: attrition shows only the chosen department and level.
 def test_attrition_shows_only_the_chosen_department_and_level():
     at = AppTest.from_file("../views/attrition.py", default_timeout=180).run()
     choose(at, "Department", "Sales")
@@ -460,6 +494,7 @@ def test_attrition_shows_only_the_chosen_department_and_level():
     assert len(at.get("plotly_chart")) == 3
 
 
+# Test: compare departments shows only for all departments.
 def test_compare_departments_shows_only_for_all_departments():
     at = AppTest.from_file("../views/trends.py", default_timeout=180).run()
     assert [toggle.label for toggle in at.toggle] == ["Compare departments"]
@@ -469,6 +504,7 @@ def test_compare_departments_shows_only_for_all_departments():
 
 # ----------------------------------------------------------------------------- the site is open to everyone
 
+# Test: no page asks for a password.
 @pytest.mark.parametrize("page", PAGES)
 def test_no_page_asks_for_a_password(page):
     at = AppTest.from_file(f"../views/{page}.py", default_timeout=180)
@@ -479,6 +515,7 @@ def test_no_page_asks_for_a_password(page):
     assert not any("passcode" in field.label.lower() for field in at.text_input)
 
 
+# Test: fact cards escape what users typed.
 def test_fact_cards_escape_what_users_typed(monkeypatch):
     shown = []
     monkeypatch.setattr("src.ui.common.st.markdown", lambda html, **kwargs: shown.append(html))

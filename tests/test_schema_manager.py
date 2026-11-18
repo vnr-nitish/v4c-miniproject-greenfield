@@ -3,6 +3,8 @@
 No test here changes a schema: the guard test replaces the execution step with one that fails
 the test if it is ever reached, and the execution tests run harmless SELECT scripts.
 """
+# How to read this file: each 'test_' function is one check that pytest runs; 'assert X' means X must be true.
+# A parameter such as 'cur' is a fixture, prepared first by a function marked @pytest.fixture.
 from pathlib import Path
 
 import pytest
@@ -28,6 +30,7 @@ SELECT 1;
 
 # ----------------------------------------------------------------------------- the splitter (no database)
 
+# Test: statements are split like the mysql client.
 def test_statements_are_split_like_the_mysql_client():
     statements = SqlScript.split(PROCEDURE)
     assert len(statements) == 3
@@ -37,6 +40,7 @@ def test_statements_are_split_like_the_mysql_client():
     assert statements[2].endswith("SELECT 1")                                         # comment-only chunks dropped
 
 
+# Test: script properties.
 def test_script_properties():
     script = SqlScript(Path("04_dw_ddl.sql"), "DROP TABLE IF EXISTS x; CREATE TABLE x (a INT);")
     assert script.number == "04" and script.drops_tables and len(script.statements) == 2
@@ -44,6 +48,7 @@ def test_script_properties():
     assert SqlScript.first_code_line("-- comment\n/* note */\n  SELECT 1\nFROM t") == "SELECT 1"
 
 
+# Test: every project script splits.
 def test_every_project_script_splits():
     for path in sorted((Path(__file__).resolve().parents[1] / "sql").glob("[0-9][0-9]_*.sql")):
         assert SqlScript.load(path).statements, path.name
@@ -51,6 +56,7 @@ def test_every_project_script_splits():
 
 # ----------------------------------------------------------------------------- the manager (database)
 
+# Fixture 'schema': prepared by pytest and handed to every test with a parameter of this name.
 @pytest.fixture(scope="module")
 def schema():
     try:
@@ -60,6 +66,7 @@ def schema():
     return SchemaManager()
 
 
+# Test: scripts are selected in order.
 def test_scripts_are_selected_in_order(schema):
     assert [s.number for s in schema.scripts()] == ["00", "01", "02", "03", "04", "05", "06", "07", "08"]
     assert [s.name for s in schema.scripts(["08", "03"])] == ["03_oltp_views.sql", "08_dw_procedures.sql"]
@@ -67,6 +74,7 @@ def test_scripts_are_selected_in_order(schema):
         schema.scripts(["99"])
 
 
+# Test: a rebuild over loaded data is refused before anything runs.
 def test_a_rebuild_over_loaded_data_is_refused_before_anything_runs(schema, monkeypatch):
     if not schema.loaded_tables():
         pytest.skip("no business data loaded")
@@ -80,6 +88,7 @@ def test_a_rebuild_over_loaded_data_is_refused_before_anything_runs(schema, monk
     assert set(schema.loaded_tables()) <= {f"{s}.{t}" for s, t in PROTECTED_TABLES}
 
 
+# Test: scripts run on the shared pool.
 def test_scripts_run_on_the_shared_pool(schema, tmp_path):
     good = tmp_path / "90_select.sql"
     good.write_text("SELECT 1;\nSELECT 'x;y';\n", encoding="utf-8")

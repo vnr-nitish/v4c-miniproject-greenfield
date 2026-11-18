@@ -1,30 +1,7 @@
 """AnalyticsManager — the warehouse (star schema) queries behind the Phase 4 dashboards.
 
-Everything here reads hr_dw only. The SQL lives here as parameterized CTEs with window functions
-(decision B7), not in warehouse views, so rankings and comparisons are computed over exactly the
-rows the dashboard filters select:
-
-    yoy_trends()          LAG()                    change against the previous review cycle
-    attrition_trend()     LAG(), SCD Type 2        headcount per department as it was at the time
-    top_performers()      DENSE_RANK()             ranks per department, ties share a rank
-    scored_workforce()    ROW_NUMBER(), NTILE(), PERCENT_RANK()
-                                                   latest review, pay quartile within level, percentile
-    risk_backtest()       NTILE(), SUM() OVER ()   how well the score separated past leavers
-    bottleneck_projects() RANK()                   overdue open projects and their teams' strain
-
-The attrition-risk score (decision B8) is a points score built from work-related factors that
-the data shows matter and that HR can act on. Personal characteristics (marital status, age,
-gender) are deliberately left out even where they correlate with attrition.
-
-Results are cached per warehouse version: the id of the latest finished ETL batch (every change
-to hr_dw — an ETL run, an SCD Type 2 apply, a project deletion — is a logged batch) and the
-date. A new batch makes every older entry unreachable, so the cache never serves stale results.
-
-The slow results behind the pages' default views are also saved in hr_dw.analytics_snapshot, so
-an app that was asleep brings them back in seconds instead of recomputing them for minutes
-(docs/backend_design.md, B24). Results saved for an older batch or by other code are never used;
-results saved on an earlier day (only dates like "today" differ) serve the pages until the
-background warm-up has replaced them.
+Reads hr_dw only, with CTEs and window functions (decision B7). Results are cached per warehouse version and
+saved in hr_dw.analytics_snapshot, so the pages load fast after the app wakes up (B24).
 """
 from __future__ import annotations
 
@@ -46,7 +23,9 @@ from src.exceptions import HRAppError, ValidationError
 
 logger = logging.getLogger(__name__)
 
+# fiscal years look like FY2024-25
 _FISCAL_YEAR = re.compile(r"FY\d{4}-\d{2}")
+# keep at most 128 results in memory
 _CACHE_SIZE = 128
 # Saved results belong to the code that made them: a changed query must not be served old rows
 _CODE_VERSION = hashlib.sha256(Path(__file__).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
@@ -54,6 +33,7 @@ _CODE_VERSION = hashlib.sha256(Path(__file__).read_bytes().replace(b"\r\n", b"\n
 _warming = threading.local()          # the results the warm-up thread has touched in its current pass
 
 
+# The filters a dashboard page can set: departments, job levels and review cycles (empty = all).
 @dataclass(frozen=True)
 class AnalyticsFilter:
     """The dashboard's filters. Empty means "all". Departments are given by name.
@@ -68,6 +48,7 @@ class AnalyticsFilter:
     fiscal_years: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        # check the filter values; bad values raise ValidationError
         errors = {}
         object.__setattr__(self, "departments", tuple(str(d) for d in self.departments))
         object.__setattr__(self, "fiscal_years", tuple(str(y) for y in self.fiscal_years))
@@ -87,6 +68,8 @@ class AnalyticsFilter:
         """' AND …' conditions on the given columns, and their parameters. The column names come
         from this module's own SQL; only the values come from the user, and they are bound."""
         sql, params = "", []
+        # for each filter that has values, add 'AND column IN (%s, %s ...)';
+        # the values are passed separately, never pasted into the SQL text
         for column, values in ((department, self.departments), (job_level, self.job_levels),
                                (fiscal_year, self.fiscal_years)):
             if column and values:
@@ -104,6 +87,7 @@ class AnalyticsFilter:
         return frame[keep]
 
 
+# One risk factor: its label, its points, and the SQL condition that checks it.
 @dataclass(frozen=True)
 class RiskFactor:
     """One attrition-risk factor: a condition on the scoring columns and the points it adds."""
@@ -113,9 +97,8 @@ class RiskFactor:
     condition: str
 
 
-# Calibrated on the warehouse (docs/backend_design.md B8, B21): one-year attrition after a review
-# is about 3x as high with overtime (6.4 % vs 2.0 %), at job level 1 (5.5 % vs <= 2.7 %) and
-# without stock options (5.0 % vs <= 3.7 %); the one-point factors each add 1.5-2.6x.
+# Points set from the warehouse data (docs/backend_design.md B8, B21): overtime, job level 1 and no stock
+# options raise one-year attrition the most (2 points each); every other factor adds 1 point.
 RISK_FACTORS = (
     RiskFactor("Works overtime", 2, "overtime_flag = 1"),
     RiskFactor("Entry level (job level 1)", 2, "job_level = 1"),
@@ -129,11 +112,13 @@ RISK_FACTORS = (
     RiskFactor("Lives more than 10 km away", 1, "distance_from_home_km > 10"),
     RiskFactor("Paid in the lower half of the level", 1, "pay_quartile <= 2"),
 )
+# the highest possible score (every factor true)
 MAX_RISK_SCORE = sum(f.points for f in RISK_FACTORS)
 
 # (lowest score, band), highest band first; back-tested one-year attrition 19.5 %, 8.0 %, 1.9 %, 0.7 %
 RISK_BANDS = ((8, "Very high"), (6, "High"), (3, "Medium"), (0, "Low"))
 
+# SQL built from the factors: the score (sum of points), a 0/1 flag per factor, the reasons as text, and the band
 _SCORE_SQL = " + ".join(f"{f.points} * COALESCE({f.condition}, 0)" for f in RISK_FACTORS)
 _FLAGS_SQL = ", ".join(f"COALESCE({f.condition}, 0) AS factor_{i}" for i, f in enumerate(RISK_FACTORS))
 _REASONS_SQL = ("CONCAT_WS(', ', "
@@ -142,9 +127,8 @@ _BAND_SQL = "CASE " + " ".join(f"WHEN score >= {low} THEN '{band}'" for low, ban
 _BAND_ORDER_SQL = ("CASE " + " ".join(f"WHEN score >= {low} THEN {len(RISK_BANDS) - i}"
                                       for i, (low, _) in enumerate(RISK_BANDS)) + " END")
 
-# Every active employee with their score. The windows run over narrow rows (ids and numbers);
-# names are joined at the end. Pay quartiles and percentiles are company-wide, so a dashboard
-# filter never changes anyone's score.
+# Every active employee with their score; names are joined at the end so the window functions stay fast.
+# Pay quartiles and percentiles are company-wide, so a dashboard filter never changes anyone's score.
 _SCORED_WORKFORCE_SQL = f"""
 WITH ranked_reviews AS (
     SELECT de.employee_id, f.review_id,
@@ -192,6 +176,7 @@ JOIN hr_dw.dim_employee e ON e.employee_sk = b.employee_sk
 LEFT JOIN hr_dw.dim_date d ON d.date_sk = b.last_review_sk
 ORDER BY b.score DESC, e.employee_code"""
 
+# Lists of allowed choices, so user input never becomes SQL text.
 _PERIODS = {"fiscal_year": "d.fiscal_year", "calendar_year": "d.calendar_year"}
 _DELIVERY_GROUPS = {"priority": "priority", "budget_band": "budget_band",
                     "department": "owning_department_name", "year": "YEAR(planned_end_date)"}
@@ -215,13 +200,17 @@ def _to_bytes(frame: pd.DataFrame) -> bytes:
     return buffer.getvalue()
 
 
+# Reads a saved Parquet result back into a DataFrame.
 def _from_bytes(payload: bytes) -> pd.DataFrame:
     return pd.read_parquet(io.BytesIO(payload))
 
 
+# HOW A DASHBOARD GETS ITS DATA: a page calls a method below (e.g. yoy_trends); it runs SQL on hr_dw and
+# returns a DataFrame the page draws with Plotly (cached). OOP (Inheritance): uses DatabaseConnection's pool.
 class AnalyticsManager(DatabaseConnection):
     """Read-only analytics over the star schema, cached per warehouse version."""
 
+    # Sets up the cache once: the results, the locks, and the current warehouse version.
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         with DatabaseConnection._lock:            # the warm-up thread and the first visitor arrive together
@@ -238,8 +227,11 @@ class AnalyticsManager(DatabaseConnection):
 
     # ------------------------------------------------------------------ cache
 
+    # ask the database for the version at most once a minute
     VERSION_TTL_SECONDS = 60
 
+    # The warehouse 'version' = the newest finished ETL batch + today's date. Every save that changes hr_dw
+    # creates a new batch, so results cached for an older version are never shown.
     def data_version(self, fresh: bool = False) -> tuple:
         """(latest finished batch id, today). A batch's status leaves STARTED in the same commit
         as its data, so a query running during an ETL can never be cached as the new version.
@@ -267,6 +259,7 @@ class AnalyticsManager(DatabaseConnection):
         finally:
             self._version_lock.release()
 
+    # The SQL behind the version: the newest finished batch id and today's date.
     def _read_version(self) -> Any:
         return self.fetch_one(
             "SELECT COALESCE(MAX(batch_id), 0), CURDATE() FROM hr_dw.etl_batch_log "
@@ -276,11 +269,13 @@ class AnalyticsManager(DatabaseConnection):
         """The warehouse was just changed by this application: check the version on the next call."""
         self._version_at = float("-inf")
 
+    # Forgets every cached and saved result.
     def clear_cache(self) -> None:
         with self._cache_lock:
             self._cache.clear()
             self._saved, self._saved_version, self._warm_version = {}, (), ()
 
+    # Every analytics method goes through here: the cached result if there is one, else compute it.
     def _cached(self, key: tuple, compute: Callable[[], Any]) -> Any:
         if self.in_rollback_session():            # uncommitted data must never reach the shared cache
             return compute()
@@ -290,6 +285,8 @@ class AnalyticsManager(DatabaseConnection):
             warmed[repr(key)] = result
         return _copy(result)
 
+    # Lookup order: 1) memory cache, 2) results saved in hr_dw.analytics_snapshot, 3) run the SQL. If two
+    # visitors ask for the same result, only one runs the query and the other waits for it.
     def _result_for(self, version: tuple, key: tuple, compute: Callable[[], Any]) -> Any:
         """From the cache, from the saved results, or computed — by one visitor only: others asking
         for the same result wait for it without holding a database connection."""
@@ -318,6 +315,7 @@ class AnalyticsManager(DatabaseConnection):
                 with self._cache_lock:
                     self._computing.pop(cache_key, None)
 
+    # Stores a result; the oldest one is dropped when there are more than 128.
     def _remember(self, cache_key: tuple, result: Any) -> None:
         self._cache[cache_key] = result
         while len(self._cache) > _CACHE_SIZE:
@@ -325,6 +323,8 @@ class AnalyticsManager(DatabaseConnection):
 
     # ------------------------------------------------------------------ warm-up and saved results
 
+    # Runs in a background thread started by app.py: after an ETL or a change it recomputes the pages' default
+    # views, so visitors don't have to wait.
     def warm_up(self) -> None:
         """Compute what the pages show before anyone changes a filter, one query at a time so that
         visitors keep free connections, then save it for the next start. Does nothing while the
@@ -363,6 +363,7 @@ class AnalyticsManager(DatabaseConnection):
         except (HRAppError, ValueError, OSError) as err:
             logger.warning("Analytics results not saved: %s", err)
 
+    # At start-up: load the results saved in hr_dw.analytics_snapshot instead of computing them again.
     def restore_results(self) -> None:
         """At start: bring back what an earlier run saved for this warehouse batch and this code.
         Without saved results (or the table) the pages simply compute them, as they always could."""
@@ -387,6 +388,7 @@ class AnalyticsManager(DatabaseConnection):
     def filter_options(self) -> dict[str, list]:
         """What the dashboard's filters can offer: departments, job levels, review cycles."""
         def compute() -> dict[str, list]:
+            # the department names, and the review cycles that have reviews
             departments = self.fetch_frame(
                 "SELECT department_name FROM hr_dw.dim_department ORDER BY department_name")
             cycles = self.fetch_frame(
@@ -396,6 +398,7 @@ class AnalyticsManager(DatabaseConnection):
                 "GROUP BY fiscal_year ORDER BY fiscal_year")
             return {"departments": departments.department_name.tolist(), "job_levels": [1, 2, 3, 4, 5],
                     "fiscal_years": cycles.fiscal_year.tolist()}
+        # compute() only runs when the result isn't cached yet
         return self._cached(("filter_options",), compute)
 
     # ------------------------------------------------------------------ overview
@@ -405,18 +408,22 @@ class AnalyticsManager(DatabaseConnection):
         review cycle against the one before it, and project delivery."""
         def compute() -> dict[str, Any]:
             where, params = filters.where("department_name", "job_level")
+            # active employees now: the current version of everyone who hasn't left
             headcount = self.fetch_one(
                 "SELECT COUNT(*) AS headcount FROM hr_dw.dim_employee "
                 "WHERE is_current AND exit_date IS NULL" + where, params)["headcount"]
             where, params = filters.where("owning_department_name")
+            # open and overdue projects, and the share of completed projects that finished late
             projects = self.fetch_one(
                 f"SELECT COALESCE(SUM(status IN {_OPEN_STATUSES}), 0) AS open_projects, "
                 f"       COALESCE(SUM(status IN {_OPEN_STATUSES} AND planned_end_date < CURDATE()), 0) "
                 "            AS overdue_projects, "
                 "        ROUND(100 * AVG(CASE WHEN status = 'Completed' THEN is_delayed END), 1) AS delayed_pct "
                 "FROM hr_dw.dim_project WHERE project_id <> 0" + where, params)
+            # the latest review cycle and its change, from yoy_trends()
             cycles = self.yoy_trends(filters)
             latest = cycles.iloc[-1].to_dict() if len(cycles) else {}
+            # attrition in the latest complete fiscal year, from attrition_trend()
             years = self.attrition_trend(AnalyticsFilter(filters.departments, filters.job_levels))
             complete = years[years.is_complete == 1]
             attrition = complete.iloc[-1].to_dict() if len(complete) else {}
@@ -441,6 +448,8 @@ class AnalyticsManager(DatabaseConnection):
 
     # ------------------------------------------------------------------ year-over-year trends
 
+    # Performance trends page. The CTE groups the reviews per cycle; LAG() compares each cycle with the one
+    # before it (the year-over-year change).
     def yoy_trends(self, filters: AnalyticsFilter = AnalyticsFilter(), period: str = "fiscal_year",
                    by_department: bool = False) -> pd.DataFrame:
         """Review results per cycle, with the change against the previous cycle (LAG).
@@ -448,14 +457,18 @@ class AnalyticsManager(DatabaseConnection):
         period: 'fiscal_year' (default — one review cycle per fiscal year) or 'calendar_year'
         of the review date. by_department compares each department with its own previous year.
         """
+        # only the allowed period names
         if period not in _PERIODS:
             raise ValidationError({"period": f"Period must be one of {', '.join(_PERIODS)}"})
+        # the filter conditions for the SQL, and their values
         where, params = filters.where("dd.department_name", "de.job_level", "d.fiscal_year")
         # the employee dimension is joined only when a job-level filter needs it (463K lookups otherwise)
         employee_join = ("JOIN hr_dw.dim_employee de ON de.employee_sk = f.employee_sk "
                          if filters.job_levels else "")
         department = "dd.department_name, " if by_department else ""
         partition = "PARTITION BY department_name " if by_department else ""
+        # 'WITH cycles AS (...)' is a CTE: per cycle, count the reviews and average the measures.
+        # Then LAG(...) OVER w takes the previous cycle's value, to compute each change.
         sql = f"""
             WITH cycles AS (
                 SELECT {_PERIODS[period]} AS period, {department}
@@ -489,8 +502,10 @@ class AnalyticsManager(DatabaseConnection):
             FROM cycles
             WINDOW w AS ({partition}ORDER BY period)
             ORDER BY {'department_name, ' if by_department else ''}period"""
+        # cached per combination of filters
         return self._cached(("yoy_trends", filters, period, by_department), lambda: self.fetch_frame(sql, params))
 
+    # Attrition per fiscal year, counting each employee in the version valid at the time (SCD Type 2).
     def attrition_trend(self, filters: AnalyticsFilter = AnalyticsFilter(),
                         by_department: bool = False) -> pd.DataFrame:
         """Attrition per fiscal year: leavers / average headcount, with the change against the
@@ -504,6 +519,8 @@ class AnalyticsManager(DatabaseConnection):
         where, params = filters.where("e.department_name", "e.job_level", "fy.fiscal_year")
         department = "e.department_name, " if by_department else ""
         partition = "PARTITION BY department_name " if by_department else ""
+        # 'fiscal' lists the fiscal years; 'counts' finds the headcount at each year's start and end and the
+        # leavers, using the dim_employee version valid on those dates (SCD Type 2); LAG() gives the change
         sql = f"""
             WITH fiscal AS (
                 SELECT fiscal_year, MIN(full_date) AS fy_start, MAX(full_date) AS fy_end,
@@ -543,6 +560,7 @@ class AnalyticsManager(DatabaseConnection):
 
     # ------------------------------------------------------------------ top performers
 
+    # Top performers page: DENSE_RANK() per department; equal scores share a rank.
     def top_performers(self, filters: AnalyticsFilter = AnalyticsFilter(), top_n: int = 10,
                        min_reviews: int = 1, active_only: bool = True) -> pd.DataFrame:
         """The best employees of each department over the selected cycles.
@@ -553,14 +571,14 @@ class AnalyticsManager(DatabaseConnection):
         review time — someone who moved is ranked in each department they were reviewed in;
         current_department and current_role show where they are now.
         """
+        # check the inputs first
         if not (isinstance(top_n, int) and 1 <= top_n <= 100):
             raise ValidationError({"top_n": "Show 1-100 ranks per department"})
         if not (isinstance(min_reviews, int) and min_reviews >= 1):
             raise ValidationError({"min_reviews": "At least 1 review is required"})
         where, params = filters.where("dd.department_name", "de.job_level", "d.fiscal_year")
-        # Leaving is a Type 1 attribute (the same on every version), so it is checked after the
-        # aggregation: as a scan filter it misleads the optimizer into reading every active
-        # employee's reviews before the cycle filter (7.9 s instead of about 1 s).
+        # per_employee: reviews and averages per person; ranked: DENSE_RANK() per department; keep the top_n.
+        # 'Leaving' is checked after the grouping: as an early filter it took 7.9 s instead of about 1 s.
         sql = f"""
             WITH per_employee AS (
                 SELECT dd.department_name, de.employee_id,
@@ -598,6 +616,8 @@ class AnalyticsManager(DatabaseConnection):
 
     # ------------------------------------------------------------------ attrition risk
 
+    # Attrition risk: every active employee gets points for the risk factors above; window functions pick each
+    # person's latest review and their percentile.
     def scored_workforce(self) -> pd.DataFrame:
         """Every active employee with their attrition-risk score, band, percentile and factors
         (factor_0, factor_1, … are the RISK_FACTORS flags). One query for the whole company; the
@@ -610,6 +630,7 @@ class AnalyticsManager(DatabaseConnection):
         if min_band not in bands:
             raise ValidationError({"min_band": f"Band must be one of {', '.join(bands)}"})
         scored = filters.select(self.scored_workforce())
+        # keep the rows at or above the chosen band
         return scored[scored.band_order >= len(bands) - bands.index(min_band)]
 
     def attrition_risk(self, filters: AnalyticsFilter = AnalyticsFilter(), limit: int = 200,
@@ -624,6 +645,7 @@ class AnalyticsManager(DatabaseConnection):
         scored = filters.select(self.scored_workforce())
         summary = (scored.groupby(["department_name", "risk_band", "band_order"], as_index=False)
                          .size().rename(columns={"size": "employees"}))
+        # each band's share of its department, in %
         summary["share_pct"] = (100 * summary.employees
                                 / summary.groupby("department_name").employees.transform("sum")).round(1)
         return summary.sort_values(["department_name", "band_order"], ignore_index=True)
@@ -632,6 +654,7 @@ class AnalyticsManager(DatabaseConnection):
                                min_band: str = "High") -> pd.DataFrame:
         """How common each risk factor is among the active employees at or above a band."""
         scored = self._at_risk(filters, min_band)
+        # for each factor: how many of these employees have it, and what share that is
         rows = [{"factor": f.label, "points": f.points, "employees": int(scored[f"factor_{i}"].sum()),
                  "share_pct": round(100 * scored[f"factor_{i}"].mean(), 1) if len(scored) else 0.0}
                 for i, f in enumerate(RISK_FACTORS)]
@@ -645,6 +668,8 @@ class AnalyticsManager(DatabaseConnection):
         Only reviews whose following year is fully observed are used (up to one year before the
         latest recorded exit). lift = the band's attrition / overall attrition.
         """
+        # observed: every past review with the facts known then, and whether the person left within a year;
+        # scored and banded: its score and band; the final SELECT: per band, how many left
         sql = f"""
             WITH observed AS (
                 SELECT f.overtime_flag, de.job_level, de.stock_option_level, f.environment_satisfaction,
@@ -684,6 +709,7 @@ class AnalyticsManager(DatabaseConnection):
         if by not in _DELIVERY_GROUPS:
             raise ValidationError({"by": f"Group by one of {', '.join(_DELIVERY_GROUPS)}"})
         where, params = filters.where("owning_department_name")
+        # completed projects grouped by the chosen column: how many were late, and by how many days
         sql = f"""
             SELECT {_DELIVERY_GROUPS[by]} AS `{by}`,
                    COUNT(*)                                                AS completed_projects,
@@ -698,10 +724,13 @@ class AnalyticsManager(DatabaseConnection):
             ORDER BY {'`year`' if by == 'year' else 'delayed_pct DESC'}"""
         return self._cached(("project_delivery", filters, by), lambda: self.fetch_frame(sql, params))
 
+    # Project bottlenecks: open projects past their planned end, ranked with RANK(), with their team's strain.
     def bottleneck_projects(self, filters: AnalyticsFilter = AnalyticsFilter(), limit: int = 25) -> pd.DataFrame:
         """Open projects past their planned end, most overdue first (RANK), with the strain on
         their reviewed team members: overtime share and average KPI."""
         where, params = filters.where("p.owning_department_name")
+        # overdue: open projects past their planned end; team: their team's overtime and KPI from the fact table;
+        # RANK() orders them by days overdue (equal days share a rank)
         sql = f"""
             WITH overdue AS (
                 SELECT p.project_sk, p.project_code, p.project_name, p.owning_department_name, p.project_manager_name,

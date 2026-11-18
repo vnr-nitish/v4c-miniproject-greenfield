@@ -12,11 +12,13 @@ import pandas as pd
 
 from src.synthesizer.base import BaseGenerator
 
+# the five survey questions (each answered 1-4)
 SURVEY_COLUMNS = ["environment_satisfaction", "job_satisfaction", "relationship_satisfaction",
                   "job_involvement", "work_life_balance"]
 # rating -> (mean, standard deviation, lowest, highest) of the KPI score
 KPI_BANDS = {4: (92.0, 4.0, 85.0, 100.0), 3: (78.0, 7.0, 60.0, 95.0), 2: (60.0, 7.0, 40.0, 75.0),
              1: (42.0, 7.0, 20.0, 60.0)}
+# review comments to pick from, per rating
 COMMENTS = {
     1: ["Performance below expectations; improvement plan agreed.", "Several objectives missed this year."],
     2: ["Met some objectives; development needed in key areas.", "Solid effort, inconsistent delivery."],
@@ -26,9 +28,11 @@ COMMENTS = {
 }
 
 
+# Shared parent of the survey and review generators; inheritance avoids writing this logic twice.
 class _YearlyGenerator(BaseGenerator):
     """Shared logic: employee x cycle-year eligibility and backward walks through the years."""
 
+    # Makes one row per employee per year (2019-2025) with hire and exit dates, to decide who gets a survey or review.
     def _employee_years(self, emp: pd.DataFrame) -> pd.DataFrame:
         years = np.array(self.config.cycle_years)
         grid = pd.DataFrame({
@@ -76,6 +80,7 @@ class _YearlyGenerator(BaseGenerator):
             values[rows] = np.where(moves, j, i)
         return states[values]
 
+    # Numbers each employee's rows backwards: 0 = the latest year, 1 = the year before, ...
     @staticmethod
     def _rank_back(frame: pd.DataFrame) -> pd.DataFrame:
         frame = frame.sort_values(["emp_idx", "year"], ascending=[True, False], ignore_index=True)
@@ -83,6 +88,8 @@ class _YearlyGenerator(BaseGenerator):
         return frame
 
 
+# Table 5 of 6: -> stg_surveys -> hr_oltp.employee_surveys: one survey per employee per year (2019-2025)
+# they worked; the latest year matches the IBM answers.
 class SurveyGenerator(_YearlyGenerator):
 
     def generate(self, emp: pd.DataFrame) -> pd.DataFrame:
@@ -90,10 +97,13 @@ class SurveyGenerator(_YearlyGenerator):
         grid = self._employee_years(emp)
         starts = (grid.year.astype(str) + "-09-01").to_numpy().astype("datetime64[D]")
         ends = (grid.year.astype(str) + "-10-31").to_numpy().astype("datetime64[D]")
+        # the survey is held between 1 September and 31 October
         grid["survey_date"] = self.random_dates(starts, ends)
+        # only the years in which the person worked on the survey date
         employed = (grid.hire_date <= grid.survey_date) & (
             grid.exit_date.isna() | (grid.exit_date > grid.survey_date)) & (grid.survey_date <= snapshot)
         s = self._rank_back(grid[employed.to_numpy()].copy())
+        # for each question: the latest answer = IBM's, earlier years walked back
         for col in SURVEY_COLUMNS:
             latest = emp[col].to_numpy()[s.emp_idx]
             s[col] = self._walk_back(s, latest, self._stayers_distribution(emp, col),
@@ -102,6 +112,8 @@ class SurveyGenerator(_YearlyGenerator):
         return s.sort_values(["emp_idx", "year"], ignore_index=True)
 
 
+# Table 6 of 6: -> stg_reviews -> hr_oltp.performance_reviews: one review per employee per year; the
+# reviewer is their manager on the review date, taken from the job history.
 class ReviewGenerator(_YearlyGenerator):
 
     def generate(self, emp: pd.DataFrame, history: pd.DataFrame, department_heads: dict) -> pd.DataFrame:
@@ -109,9 +121,11 @@ class ReviewGenerator(_YearlyGenerator):
         snapshot = np.datetime64(cfg.snapshot_date, "D")
         grid = self._employee_years(emp)
         next_year = (grid.year + 1).astype(str)
+        # the review is held between 15 January and 15 March of the next year
         grid["review_date"] = self.random_dates((next_year + "-01-15").to_numpy().astype("datetime64[D]"),
                                                 (next_year + "-03-15").to_numpy().astype("datetime64[D]"))
         cutoff = (grid.year.astype(str) + "-09-30").to_numpy().astype("datetime64[D]")
+        # reviewed if hired by 30 September and still employed on the review date
         eligible = (grid.hire_date <= cutoff) & (
             grid.exit_date.isna() | (grid.exit_date > grid.review_date)) & (grid.review_date <= snapshot)
         r = self._rank_back(grid[eligible.to_numpy()].copy())
@@ -132,12 +146,14 @@ class ReviewGenerator(_YearlyGenerator):
         bands = np.array([KPI_BANDS[int(rating)] for rating in r.rating])
         r["kpi_score"] = np.round(self._truncated_normal(*bands.T), 2)
 
+        # about 35 % of reviews get a comment that fits the rating
         pick = self._rng.integers(0, 10, n)
         has_comment = self._rng.random(n) < 0.35
         r["comments"] = [COMMENTS[int(rt)][p % len(COMMENTS[int(rt)])] if c else None
                          for rt, p, c in zip(r.rating, pick, has_comment)]
 
         r["employee_code"] = emp.employee_code.to_numpy()[r.emp_idx]
+        # the reviewer: the employee's manager on the review date
         r["reviewer_code"] = self._reviewers(emp, history, r, department_heads)
         return r.sort_values(["emp_idx", "year"], ignore_index=True)
 
@@ -160,6 +176,7 @@ class ReviewGenerator(_YearlyGenerator):
         q = r[["emp_idx", "review_date"]].copy()
         q["review_date"] = q.review_date.astype("datetime64[s]")
         q["_order"] = np.arange(len(q))
+        # merge_asof finds, for each review date, the job version that was valid then
         at = pd.merge_asof(q.sort_values("review_date"), h.sort_values("effective_start_date"),
                            left_on="review_date", right_on="effective_start_date", by="emp_idx",
                            direction="backward").sort_values("_order")

@@ -747,3 +747,15 @@ of SQL techniques (that slide now lists what each of the 9 scripts creates). Fre
 
 The diagrams also have Mermaid versions now (`diagrams/*.mmd`), generated from the SQL. The `.drawio` files stay the
 main versions and open directly in draw.io through File > Open from > Device; they don't need its AI chat.
+
+## Step 33 — A walkthrough of the code, for the evaluation
+
+New `docs/code_walkthrough.md` follows the data through the code, with a link to the exact line for each step:
+saving a form (Onboard, step by step down to the stored procedures and the commit), loading a dashboard (manager,
+cache, SQL, chart), the six generated tables and where Faker is used, how the SQL scripts built the local and the
+Aiven databases, and where each OOP concept lives.
+
+Every Python file now has plain-English comments: above each class and function (what it takes, what it does,
+what it gives back) and above each step inside it, plus a sentence above every test. Long comment blocks and the
+long docstrings at the top of files were cut to a few lines. No line of code changed, which was checked by
+comparing each file's syntax tree before and after.

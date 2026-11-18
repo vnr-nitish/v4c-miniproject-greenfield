@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 os.environ["HR_WARM_UP"] = "off"      # no background queries while tests hold every connection
 
 
+# Fixture 'connection': prepared by pytest and handed to every test with a parameter of this name.
 @pytest.fixture(scope="session")
 def connection():
     load_dotenv(os.environ.get("HR_ENV_FILE") or ROOT / ".env", override=True)
@@ -28,6 +29,7 @@ def connection():
     conn.close()
 
 
+# Fixture 'cur': prepared by pytest and handed to every test with a parameter of this name.
 @pytest.fixture
 def cur(connection):
     """A cursor inside a transaction that is always rolled back — tests leave no data behind."""

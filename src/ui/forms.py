@@ -11,6 +11,7 @@ from src.models import Position
 from src.models.employee import BUSINESS_TRAVEL
 
 
+# @st.cache_data remembers the answer for an hour per department and level, so the list isn't read on every click.
 @st.cache_data(ttl=3600, show_spinner=False)
 def _manager_candidates(department_id: int, min_level: int):
     """Cached because the query reads the 100K-row current-employee view (~2 s on the cloud);
@@ -30,22 +31,29 @@ def position_picker(key: str, current: Position | None = None) -> dict:
 
     Everything is read before the first field is drawn, so all the fields appear together. That
     needs the current choices up front, and Streamlit already holds them in session_state."""
+    # the lookup lists: departments, roles, levels
     ref = ReferenceDataManager()
+    # read everything first, so all the fields appear together
     with st.spinner("Preparing the form…"):
         ref.preload()
         departments = ref.departments()
         dept_ids = departments.department_id.tolist()
+        # the department chosen so far (or the current one)
         department_id = _choice(f"{key}_dept", dept_ids, current.department_id if current else None)
+        # only the roles offered in that department
         roles = ref.roles_for(department_id)
         role_ids = roles.job_role_id.tolist()
         role_key = f"{key}_role_{department_id}"
         job_role_id = _choice(role_key, role_ids, current.job_role_id if current else None)
+        # only the levels that role allows
         levels = ref.levels_for(job_role_id)
         level_ids = levels.job_level_id.tolist()
         level_key = f"{key}_level_{job_role_id}"
         job_level_id = _choice(level_key, level_ids, current.job_level_id if current else None)
+        # possible managers: people of that department at a higher level
         candidates = _manager_candidates(int(department_id), min(job_level_id + 1, 5))
 
+    # draw the three drop-downs side by side
     c1, c2, c3 = st.columns(3)
     c1.selectbox("Department", dept_ids, key=f"{key}_dept", index=dept_ids.index(department_id),
                  format_func=dict(zip(departments.department_id, departments.department_name)).get)
@@ -53,12 +61,14 @@ def position_picker(key: str, current: Position | None = None) -> dict:
                  format_func=dict(zip(roles.job_role_id, roles.role_name)).get)
     c3.selectbox("Job level", level_ids, key=level_key, index=level_ids.index(job_level_id),
                  format_func=lambda lv: f"{lv} · {levels.set_index('job_level_id').level_title[lv]}")
+    # the chosen level's salary band: the pay slider can't leave it
     band = levels.set_index("job_level_id").loc[job_level_id]
     low, high = int(band.salary_band_min), int(band.salary_band_max)
     default = int(current.monthly_income) if current and low <= current.monthly_income <= high else (low + high) // 2
     c4, c5, c6, c7 = st.columns([3, 3, 2, 2])
     income = c4.slider("Monthly income (inside the level's band)", low, high, default, step=50,
                        key=f"{key}_pay_{job_level_id}")
+    # the manager choices: none, or one of the candidates
     manager_ids = [None] + candidates.employee_id.tolist()
     names = dict(zip(candidates.employee_id, candidates.full_name + " · L" + candidates.job_level.astype(str)))
     # A change must start from what is true today: nothing may change just because a field was not touched
@@ -75,6 +85,7 @@ def position_picker(key: str, current: Position | None = None) -> dict:
                           index=BUSINESS_TRAVEL.index(current.business_travel) if current else 1)
     stock = c7.segmented_control("Stock option level", [0, 1, 2, 3], required=True, key=f"{key}_stock",
                                  default=current.stock_option_level if current else 0)
+    # hand back every chosen value; the page turns them into a Position object
     return dict(department_id=int(department_id), job_role_id=int(job_role_id), job_level_id=int(job_level_id),
                 monthly_income=Decimal(income), manager_id=None if manager_id is None else int(manager_id),
                 stock_option_level=stock, business_travel=travel)

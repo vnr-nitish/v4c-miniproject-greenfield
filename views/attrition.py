@@ -12,6 +12,7 @@ am = AnalyticsManager()
 department_column, level_column, _ = st.columns([1, 1, 2])
 filters = AnalyticsFilter(department_filter(department_column), job_level_filter(level_column))
 
+# everyone's risk score, and the back-test evidence
 with st.spinner("Reading the warehouse…"):
     workforce = attempt(am.scored_workforce)
     backtest = attempt(am.risk_backtest)
@@ -19,17 +20,21 @@ if workforce is None:
     st.stop()
 
 left, middle, right = st.columns(3)
+# chart 1: employees per risk band and department
 left.plotly_chart(charts.bars(am.risk_summary(filters), "department_name", "employees", "risk_band",
                               title="Employees per risk band", colors=theme.BAND_COLORS), width="stretch")
+# chart 2: how common each factor is among High and Very high risk
 prevalence = am.risk_factor_prevalence(filters)
 middle.plotly_chart(charts.bars(prevalence.iloc[::-1], "factor", "share_pct", horizontal=True,
                                 title="Factors among High / Very high risk (%)"), width="stretch")
+# chart 3, the evidence: the % who left within a year, per band
 if backtest is not None:
     right.plotly_chart(charts.bars(backtest, "risk_band", "left_within_year_pct", "risk_band",
                                    title="Evidence: % who left within a year", colors=theme.BAND_COLORS,
                                    text="left_within_year_pct"), width="stretch")
 
 
+# The pop-up when 'View' is clicked: the employee's score, band and risk factors.
 @st.dialog("Why this employee is at risk", width="medium", on_dismiss="rerun")
 def explain(row: pd.Series) -> None:
     st.markdown(f"### {row.full_name} · {row.employee_code}")
@@ -45,9 +50,11 @@ def explain(row: pd.Series) -> None:
 def at_risk_table() -> None:
     """A fragment: choosing a band or clicking View redraws this table only, not the charts above it."""
     band = st.segmented_control("Minimum band", ["Very high", "High", "Medium", "Low"], default="High", required=True)
+    # the employees at or above the chosen band, highest score first
     at_risk = am.attrition_risk(filters, limit=500, min_band=band)
     shown = at_risk[["employee_code", "full_name", "department_name", "job_role", "job_level", "tenure_years",
                      "score", "risk_band", "risk_percentile", "risk_factors"]].copy()
+    # a 'View' column to click
     shown.insert(0, "view", "View")
     # A new key after each View leaves no cell selected, so the same row can be opened again
     round_number = st.session_state.setdefault("at_risk_round", 0)
@@ -61,6 +68,7 @@ def at_risk_table() -> None:
                                                                                  format="%d"),
                                         "risk_band": "Band", "risk_factors": "Risk factors",
                                         "risk_percentile": st.column_config.NumberColumn("Percentile", format="%.1f")})
+    # a click on 'View' opens the pop-up for that row
     views = [row for row, column in event.selection.cells if column == "view"]
     if views:
         st.session_state["at_risk_round"] = round_number + 1

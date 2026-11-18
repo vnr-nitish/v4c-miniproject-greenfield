@@ -10,9 +10,12 @@ from __future__ import annotations
 from src.db_manager import DatabaseConnection
 
 
+# OOP (Inheritance): the ETL itself is SQL (stored procedures). This class only starts them and reads their
+# logs, for the command line (scripts/run_etl.py) and the 'ETL & data health' page.
 class EtlManager(DatabaseConnection):
     """Data-access manager for the two ETL stages and their logs (a Singleton, like every manager)."""
 
+    # Stage 1 (run once): hr_staging -> hr_oltp through sp_migrate_from_staging (deduplicates and cleans).
     def migrate_staging(self, full_reload: bool = False) -> int:
         """Stage 1: hr_staging -> hr_oltp. Returns the batch id.
 
@@ -22,11 +25,13 @@ class EtlManager(DatabaseConnection):
         (batch_id,) = self.call_procedure("hr_oltp.sp_migrate_from_staging", (full_reload,), out_params=1)
         return batch_id
 
+    # Stage 2 (any time): hr_oltp -> hr_dw through sp_run_etl (dimensions, SCD Type 2, then the fact table).
     def run_warehouse_etl(self) -> int:
         """Stage 2: hr_oltp -> hr_dw (dimensions, SCD Type 2, fact). Returns the batch id."""
         (batch_id,) = self.call_procedure("hr_dw.sp_run_etl", out_params=1)
         return batch_id
 
+    # The SELECT for batch header rows, with each batch's duration in seconds.
     _HEADER_SQL = ("SELECT batch_id, step_name AS process, status, rows_affected, message, started_at, "
                    "       finished_at, TIMESTAMPDIFF(SECOND, started_at, finished_at) AS seconds "
                    "FROM hr_dw.etl_batch_log ")

@@ -12,11 +12,13 @@ from src.ui.forms import _manager_candidates
 from src.ui.theme import TILE_COLORS, inject_css
 
 
+# Draws the coloured title band at the top of a page (and adds the page styles).
 def page_header(title: str) -> None:
     inject_css()
     st.markdown(f"<div class='hero'><h1>{title}</h1></div>", unsafe_allow_html=True)
 
 
+# Draws a highlighted note box with the given text.
 def note(text: str) -> None:
     st.markdown(f"<div class='note'>{text}</div>", unsafe_allow_html=True)
 
@@ -24,6 +26,7 @@ def note(text: str) -> None:
 def tiles(items: list[tuple[str, str, float | None, bool]]) -> None:
     """KPI tiles: (label, value, change, higher_is_good)."""
     html = []
+    # one tile per item: its label, its value, and a green or red arrow for the change
     for n, (label, value, change, good_up) in enumerate(items):
         delta = ""
         if change is not None and change == change:            # not NaN
@@ -48,6 +51,7 @@ def fact_cards(cards: dict[str, list[tuple[str, Any]]]) -> None:
     st.markdown(f"<div class='fact-cards'>{''.join(html)}</div>", unsafe_allow_html=True)
 
 
+# After a successful save: remember the message, rerun the page so it shows fresh data, then show the pop-up.
 def announce(title: str, message: str, tables: dict[str, Any] | None = None, caption: str | None = None) -> None:
     """A change was saved: redraw the page with the new data and show this in a pop-up on top."""
     st.session_state["announcement"] = (title, message, tables or {}, caption)
@@ -58,8 +62,10 @@ def show_announcement() -> None:
     """The pop-up announce() asked for, if any. Only its OK button closes it."""
     if "announcement" not in st.session_state:
         return
+    # take the saved message (pop = read it and remove it)
     title, message, tables, caption = st.session_state.pop("announcement")
 
+    # the pop-up window; dismissible=False means only the OK button closes it
     @st.dialog(title, width="large", dismissible=False)
     def popup() -> None:
         st.success(message)
@@ -93,15 +99,21 @@ def job_level_filter(container: Any) -> tuple[int, ...]:
     return () if chosen == "All" else (chosen,)
 
 
+# Every save and read on the pages goes through attempt(): a manager raises one of the application's own
+# exceptions (src/exceptions.py), and this shows it as a warning or an error message.
 def attempt(action: Callable[[], Any]) -> Any:
     """Run a manager call and show its failure as a message the user can act on."""
     try:
         return action()
+    # a rule was broken: list every field with its message
     except ValidationError as err:
         st.warning("Please correct the following:\n" + "\n".join(
             f"- **{field.replace('_', ' ').capitalize() or 'Input'}**: {message}" for field, message in err.errors.items()))
+    # refused by the database, not found, or busy: one yellow warning
     except (BusinessRuleError, NotFoundError, PoolBusyError) as err:
         st.warning(str(err))
+    # anything else from the database: a red error
     except HRAppError as err:
         st.error(f"The database could not complete this: {err}")
+    # a failed action returns None, so the page knows nothing was saved
     return None

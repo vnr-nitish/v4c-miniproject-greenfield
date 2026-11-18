@@ -9,6 +9,7 @@ import pandas as pd
 from src.synthesizer.base import BaseGenerator
 from src.synthesizer.reference import EXIT_REASONS, JOB_LEVELS
 
+# IBM's column names -> our staging column names
 IBM_TO_STAGING = {
     "Age": "age", "Attrition": "attrition", "BusinessTravel": "business_travel", "DailyRate": "daily_rate",
     "Department": "department", "DistanceFromHome": "distance_from_home", "Education": "education",
@@ -26,21 +27,27 @@ IBM_TO_STAGING = {
     "YearsSinceLastPromotion": "years_since_last_promotion", "YearsWithCurrManager": "years_with_curr_manager",
 }
 
+# the groups used for sampling: every combination keeps its share
 STRATA = ["Attrition", "Department", "JobRole", "JobLevel"]
 EXIT_REASON_NAMES = list(EXIT_REASONS)
+# how likely each exit reason is, before adjusting for the person
 BASE_EXIT_WEIGHTS = np.array([0.30, 0.14, 0.12, 0.10, 0.08, 0.02, 0.10, 0.09, 0.05])
 
 
+# Table 1 of 6 (-> hr_oltp.employees). 1,470 IBM rows become 100,000: _stratified_sample copies each ~68
+# times, _jitter varies pay/age/distance, _dates makes real dates, _identity adds Faker names and phones.
 class EmployeeGenerator(BaseGenerator):
     """Stratified bootstrap of the IBM rows + bounded jitter + Faker identity + dates."""
 
     def generate(self, source: pd.DataFrame) -> pd.DataFrame:
+        # the steps, in order; each one adds or changes columns
         df = self._stratified_sample(source)
         df = df.rename(columns=IBM_TO_STAGING)
         self._jitter(df)
         self._dates(df)
         self._exit_reasons(df)
         self._identity(df)
+        # sorted by employee code
         return df.sort_values("employee_code", ignore_index=True)
 
     # ------------------------------------------------------------------ steps
@@ -48,13 +55,17 @@ class EmployeeGenerator(BaseGenerator):
     def _stratified_sample(self, source: pd.DataFrame) -> pd.DataFrame:
         """Each (attrition, department, role, level) stratum gets exactly its proportional share."""
         n = self.config.n_employees
+        # the IBM rows of each group
         groups = list(source.groupby(STRATA, sort=True).indices.values())
         sizes = np.array([len(g) for g in groups], dtype=float)
+        # each group's exact share of 100,000; rounded down, then the leftover places go to the largest remainders
         exact = sizes / sizes.sum() * n
         counts = np.floor(exact).astype(int)
         leftover = n - counts.sum()
         counts[np.argsort(-(exact - counts), kind="stable")[:leftover]] += 1   # largest remainder
+        # rng.choice with replace=True = sampling with replacement (a 'bootstrap')
         picks = np.concatenate([self._rng.choice(g, size=c, replace=True) for g, c in zip(groups, counts) if c])
+        # mix the order
         self._rng.shuffle(picks)
         return source.iloc[picks].reset_index(drop=True)
 
@@ -81,7 +92,9 @@ class EmployeeGenerator(BaseGenerator):
         cfg = self.config
         snapshot = np.datetime64(cfg.snapshot_date, "D")
         leaver = (df.attrition == "Yes").to_numpy()
+        # leavers get a random exit date between 2019 and the snapshot (30 June 2026)
         exit_dates = self.random_dates(np.full(n, np.datetime64(cfg.exit_window_start, "D")), np.full(n, snapshot))
+        # the day IBM's numbers describe: the exit date for leavers, the snapshot for everyone else
         ref = np.where(leaver, exit_dates, snapshot)
 
         birth_offset = self._rng.integers(0, 360, n)
@@ -91,22 +104,24 @@ class EmployeeGenerator(BaseGenerator):
         hire_offset = np.where(at_18, np.minimum(hire_offset, birth_offset), hire_offset)
 
         df["ref_date"] = ref
+        # count back: the birth date gives exactly IBM's age, the hire date exactly IBM's years at the company
         dob = self.years_before(ref, df.age, birth_offset)
         hire = self.years_before(ref, df.years_at_company, hire_offset)
-        # Calendar arithmetic across leap years can leave someone hired at exactly 18 a day short.
-        # For those rows: earliest birthday and latest hire date that still reproduce Age and
-        # YearsAtCompany exactly — this always leaves a full 18 years in between.
+        # Leap years can leave someone hired at exactly 18 a day short; for them, use the earliest birthday
+        # and latest hire date that still match IBM's Age and YearsAtCompany.
         short = self.full_years(dob, hire) < 18
         if short.any():
             dob[short] = self.years_before(ref[short], df.age.to_numpy()[short], np.full(short.sum(), 359))
             hire[short] = self.years_before(ref[short], df.years_at_company.to_numpy()[short], np.zeros(short.sum()))
         df["date_of_birth"] = dob
         df["hire_date"] = hire
+        # only leavers have an exit date
         df["exit_date"] = np.where(leaver, ref, np.datetime64("NaT"))
 
     def _exit_reasons(self, df: pd.DataFrame) -> None:
         """Leavers get a reason whose probability depends on their profile."""
         n = len(df)
+        # start from the base chances, then adjust them for each person's situation
         w = np.tile(BASE_EXIT_WEIGHTS, (n, 1))
         idx = {name: i for i, name in enumerate(EXIT_REASON_NAMES)}
         stressed = ((df.over_time == "Yes") | (df.work_life_balance <= 2)).to_numpy()
@@ -116,20 +131,25 @@ class EmployeeGenerator(BaseGenerator):
         w[(df.age < 55).to_numpy(), idx["Retirement"]] = 0
         w[(df.age >= 55).to_numpy(), idx["Retirement"]] = 3.0
         w /= w.sum(axis=1, keepdims=True)
+        # draw one reason per person with those chances
         choice = (w.cumsum(axis=1) < self._rng.random((n, 1))).sum(axis=1)
         reasons = np.array(EXIT_REASON_NAMES, dtype=object)[np.minimum(choice, len(EXIT_REASON_NAMES) - 1)]
         df["exit_reason"] = np.where(df.attrition == "Yes", reasons, None)
 
+    # Faker: 3,000 first names per gender, 3,000 last names and 5,000 phone numbers are made once, then
+    # picked at random with the seeded generator (faster than calling Faker 100,000 times, still repeatable).
     def _identity(self, df: pd.DataFrame) -> None:
         """Faker name pools sampled with the seeded generator: fast and reproducible (D20)."""
         n = len(df)
         fk = self._faker
+        # Faker: 3,000 male and 3,000 female first names, 3,000 last names and 5,000 phone numbers
         male = np.array([fk.first_name_male() for _ in range(3000)], dtype=object)
         female = np.array([fk.first_name_female() for _ in range(3000)], dtype=object)
         last = np.array([fk.last_name() for _ in range(3000)], dtype=object)
         phones = np.array([fk.phone_number() for _ in range(5000)], dtype=object)
 
         is_male = (df.gender == "Male").to_numpy()
+        # pick a first name that matches the gender, a last name and a phone number at random
         df["first_name"] = np.where(is_male, male[self._rng.integers(0, len(male), n)],
                                     female[self._rng.integers(0, len(female), n)])
         df["last_name"] = last[self._rng.integers(0, len(last), n)]
@@ -141,5 +161,6 @@ class EmployeeGenerator(BaseGenerator):
         number[order] = np.arange(1, n + 1)
         df["employee_code"] = [f"EMP{k:06d}" for k in number]
         clean = lambda s: re.sub(r"[^a-z]", "", s.lower())                       # noqa: E731
+        # e-mail = firstname.lastname.number@example.com, so every address is unique
         df["email"] = [f"{clean(f)}.{clean(l)}.{k}@{self.config.email_domain}"
                        for f, l, k in zip(df.first_name, df.last_name, number)]

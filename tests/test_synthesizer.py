@@ -3,6 +3,8 @@
 No database is needed except for the reference-data and Singleton tests, which skip themselves
 when MySQL is unavailable.
 """
+# How to read this file: each 'test_' function is one check that pytest runs; 'assert X' means X must be true.
+# A parameter such as 'cur' is a fixture, prepared first by a function marked @pytest.fixture.
 from dataclasses import replace
 
 import pandas as pd
@@ -15,6 +17,7 @@ from src.synthesizer.run import SynthesisPipeline
 N = 3000
 
 
+# Fixture 'build': prepared by pytest and handed to every test with a parameter of this name.
 @pytest.fixture(scope="module")
 def build():
     config = replace(SynthesizerConfig(), n_employees=N, seed=11)
@@ -23,12 +26,14 @@ def build():
     return config, data, validator, source
 
 
+# Test: every business rule holds.
 def test_every_business_rule_holds(build):
     _, _, validator, _ = build
     failing = [(area, rule, v) for area, rule, v in validator.checks if v]
     assert not failing, failing
 
 
+# Test: IBM tenure columns are reproduced.
 def test_ibm_tenure_columns_are_reproduced(build):
     _, _, validator, _ = build
     fidelity = dict(validator.fidelity)
@@ -37,6 +42,7 @@ def test_ibm_tenure_columns_are_reproduced(build):
     assert fidelity["YearsWithCurrManager"] >= 95.0
 
 
+# Test: population mix matches the source.
 def test_population_mix_matches_the_source(build):
     _, data, _, source = build
     ibm = (source.Attrition == "Yes").mean()
@@ -48,6 +54,7 @@ def test_population_mix_matches_the_source(build):
         assert diff < 0.01
 
 
+# Test: correlations are preserved.
 def test_correlations_are_preserved(build):
     # Sampling noise shrinks with size: at 3,000 employees the largest difference is ~0.05, at the
     # full 100,000 it is ~0.01 (see docs/synthesis_report.md). The bound here suits the small build.
@@ -56,6 +63,7 @@ def test_correlations_are_preserved(build):
     assert largest < 0.08 and mean < 0.02
 
 
+# Test: employee codes and emails are unique.
 def test_employee_codes_and_emails_are_unique(build):
     _, data, _, _ = build
     assert data.employees.employee_code.is_unique
@@ -63,6 +71,7 @@ def test_employee_codes_and_emails_are_unique(build):
     assert data.employees.employee_code.str.fullmatch(r"EMP\d{6}").all()
 
 
+# Test: planted issues match the manifest.
 def test_planted_issues_match_the_manifest(build):
     config, data, _, _ = build
     manifest = data.anomaly_manifest
@@ -74,6 +83,7 @@ def test_planted_issues_match_the_manifest(build):
     assert reviews.duplicated(["employee_code", "review_year"]).sum() == manifest["duplicate_review_rows"]
 
 
+# Test: same seed gives identical data.
 def test_same_seed_gives_identical_data():
     config = replace(SynthesizerConfig(), n_employees=300, seed=5)
     first, _, _ = SynthesisPipeline(config).generate()
@@ -84,6 +94,7 @@ def test_same_seed_gives_identical_data():
 
 # ----------------------------------------------------------------------------- with the database
 
+# Test: reference mirror matches the database.
 def test_reference_mirror_matches_the_database(connection):
     cur = connection.cursor()
     cur.execute("SELECT department_id, department_name FROM hr_oltp.departments")
@@ -103,6 +114,7 @@ def test_reference_mirror_matches_the_database(connection):
     cur.close()
 
 
+# Test: database connection is a shared singleton.
 def test_database_connection_is_a_shared_singleton(connection):
     from src.db_manager import DatabaseConnection
     from src.synthesizer.loader import StagingLoader

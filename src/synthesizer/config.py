@@ -8,6 +8,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+# Every setting in one place: 100,000 employees, seed 42, Indian names (en_IN), 2,000 projects ...
 @dataclass(frozen=True)
 class SynthesizerConfig:
     # scale and reproducibility (D16)
@@ -31,9 +32,8 @@ class SynthesizerConfig:
     # job history (section 5)
     transfer_share: float = 0.10
 
-    # yearly history of reviews and surveys (section 6, D26): the chance per year, going back in
-    # time, that a value moves to a neighbouring value (60 % of outstanding ratings stay outstanding,
-    # 80 % of overtime stays overtime)
+    # yearly history of reviews and surveys (D26): the chance per year back that a value moves to a
+    # neighbouring one (so 60 % of outstanding ratings stay outstanding, 80 % of overtime stays overtime)
     rating_change: float = 0.40
     overtime_change: float = 0.20
     training_change: float = 0.30
@@ -54,6 +54,7 @@ class SynthesizerConfig:
     source_csv: Path = field(default=PROJECT_ROOT / "data" / "raw" / "WA_Fn-UseC_-HR-Employee-Attrition.csv")
     output_dir: Path = field(default=PROJECT_ROOT / "data" / "synthesized")
 
+    # The review years as a list: 2019, 2020, ... 2025.
     @property
     def cycle_years(self) -> list[int]:
         return list(range(self.first_cycle_year, self.last_cycle_year + 1))
