@@ -1,14 +1,9 @@
-"""ETL tests: prove that the stored-procedure ETL (sql/07, sql/08) moved the data correctly.
+"""ETL tests: prove that the stored-procedure ETL moved the data correctly (staging -> OLTP -> warehouse).
 
-Reconciliation tests read the loaded data and compare each layer with the one before it:
-  staging -> OLTP   every record loaded or explained, planted issues fixed (anomaly manifest),
-                    the D19 rule applied, IBM columns reconstructable (lossless decomposition)
-  OLTP -> warehouse every job version is one SCD Type 2 version, every review one fact row
-                    linked to the employee version valid on its review date
-They need a completed run:  python scripts/run_etl.py --migrate
-Change-flow tests run the application's SCD Type 2 path inside a transaction that is rolled
-back (see conftest.py), so the loaded data is never modified.
-""" 
+They need a completed run (python scripts/run_etl.py --migrate); change tests are rolled back (see conftest.py).
+"""
+# How to read this file: each 'test_' function is one check that pytest runs; 'assert X' means X must be true.
+# A parameter such as 'cur' is a fixture, prepared first by a function marked @pytest.fixture.
 import json
 from datetime import date, timedelta
 
@@ -28,6 +23,7 @@ def scalar(cur, sql, params=None):
     return cur.fetchone()[0]
 
 
+# Fixture 'migration': prepared by pytest and handed to every test with a parameter of this name.
 @pytest.fixture(scope="module", autouse=True)
 def migration(connection):
     """Step counts of the latest successful staging -> OLTP migration (skips if the ETL never ran)."""
@@ -60,6 +56,7 @@ STAGED_RECORDS = [   # staging table, OLTP table, business key (what makes a sta
 ]
 
 
+# Test: every staged record is loaded or rejected.
 @pytest.mark.parametrize("staging, target, key", STAGED_RECORDS)
 def test_every_staged_record_is_loaded_or_rejected(cur, migration, staging, target, key):
     unique = scalar(cur, f"SELECT COUNT(*) FROM (SELECT DISTINCT {key} FROM hr_staging.{staging}) k")
@@ -70,6 +67,7 @@ def test_every_staged_record_is_loaded_or_rejected(cur, migration, staging, targ
     assert scalar(cur, f"SELECT COUNT(*) FROM hr_oltp.{target}") >= unique - rejected
 
 
+# Test: planted issues were all fixed.
 def test_planted_issues_were_all_fixed(cur, migration):
     manifest_file = CONFIG.output_dir / "anomaly_manifest.json"
     if not manifest_file.exists():
@@ -83,6 +81,7 @@ def test_planted_issues_were_all_fixed(cur, migration):
     assert steps["check: end dates match LEAD(start)"] == 0
 
 
+# Test: resubmitted reviews keep the latest submission.
 def test_resubmitted_reviews_keep_the_latest_submission(cur):
     cur.execute("""
         WITH submissions AS (
@@ -100,6 +99,7 @@ def test_resubmitted_reviews_keep_the_latest_submission(cur):
     assert resubmitted > 0 and latest_kept == resubmitted
 
 
+# Test: prior companies follow the D19 rule.
 def test_prior_companies_follow_the_d19_rule(cur):
     # D19: no prior experience <=> no previous employer; with experience there was at least one
     cur.execute("SELECT COALESCE(SUM((prior_experience_years = 0) <> (prior_companies_count = 0)), 0) "
@@ -107,6 +107,7 @@ def test_prior_companies_follow_the_d19_rule(cur):
     assert cur.fetchone()[0] == 0
 
 
+# Test: job history is contiguous and starts at hire.
 def test_job_history_is_contiguous_and_starts_at_hire(cur):
     assert scalar(cur, """
         SELECT COUNT(*) FROM (
@@ -193,6 +194,7 @@ def test_snapshot_view_reconstructs_the_ibm_columns(cur):
 
 # ----------------------------------------------------------------------------- OLTP -> warehouse
 
+# Test: every job version is one warehouse version.
 def test_every_job_version_is_one_warehouse_version(cur, migration):
     assert scalar(cur, "SELECT COUNT(*) FROM hr_dw.dim_employee") == \
         scalar(cur, "SELECT COUNT(*) FROM hr_oltp.employee_job_history")
@@ -204,6 +206,7 @@ def test_every_job_version_is_one_warehouse_version(cur, migration):
         scalar(cur, "SELECT COUNT(*) FROM hr_oltp.employees")
 
 
+# Test: SCD Type 2 periods are contiguous and numbered.
 def test_scd2_periods_are_contiguous_and_numbered(cur, migration):
     cur.execute("""
         SELECT COALESCE(SUM(end_date <> COALESCE(next_start - INTERVAL 1 DAY, DATE '9999-12-31')), 0),
@@ -216,6 +219,7 @@ def test_scd2_periods_are_contiguous_and_numbered(cur, migration):
     assert cur.fetchone() == (0, 0)          # inclusive end = next start - 1 day: no gaps, no overlaps
 
 
+# Test: warehouse values match OLTP.
 def test_warehouse_values_match_oltp(cur, migration):
     cur.execute("""
         SELECT COALESCE(SUM(NOT (d.department_code = dep.department_code AND d.job_role = r.role_name
@@ -234,6 +238,7 @@ def test_warehouse_values_match_oltp(cur, migration):
     assert cur.fetchone() == (0, 0)
 
 
+# Test: every review is one fact row.
 def test_every_review_is_one_fact_row(cur, migration):
     assert scalar(cur, "SELECT COUNT(*) FROM hr_dw.fact_performance_reviews") == \
         scalar(cur, "SELECT COUNT(*) FROM hr_oltp.performance_reviews")
@@ -241,6 +246,7 @@ def test_every_review_is_one_fact_row(cur, migration):
                        "WHERE source_table = 'hr_oltp.performance_reviews'") == 0
 
 
+# Test: fact rows point to the version valid on the review date.
 def test_fact_rows_point_to_the_version_valid_on_the_review_date(cur, migration):
     cur.execute("""
         SELECT COALESCE(SUM(de.employee_id <> r.employee_id
@@ -267,6 +273,7 @@ def test_fact_rows_point_to_the_version_valid_on_the_review_date(cur, migration)
         scalar(cur, "SELECT COUNT(*) FROM hr_oltp.performance_reviews WHERE project_id IS NULL") > 0
 
 
+# Test: dimension date has the indian fiscal year.
 def test_dim_date_has_the_indian_fiscal_year(cur, migration):
     cur.execute("SELECT full_date, fiscal_year, fiscal_quarter, day_of_week, week_of_year FROM hr_dw.dim_date "
                 "WHERE date_sk IN (20240331, 20240401, 20241231) ORDER BY date_sk")
@@ -340,6 +347,7 @@ def test_personal_change_overwrites_every_version(cur, migration):
     assert cur.fetchone() == (versions, versions)
 
 
+# Test: invalid position changes are refused.
 @pytest.mark.parametrize("change, message", [
     (dict(department_id=HR), "does not exist in the selected department"),       # Laboratory Technician not in HR
     (dict(job_level=4), "outside the allowed range"),                           # role range is 1-3
@@ -358,6 +366,7 @@ def test_invalid_position_changes_are_refused(cur, migration, change, message):
     assert exc.value.errno == SIGNAL and message in exc.value.msg
 
 
+# Test: leavers cannot change jobs.
 def test_leavers_cannot_change_jobs(cur, migration):
     cur.execute("SELECT employee_id, department_id, job_role_id, job_level, manager_id, monthly_income, "
                 "stock_option_level, business_travel FROM hr_oltp.vw_employee_current "

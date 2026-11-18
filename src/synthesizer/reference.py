@@ -4,6 +4,7 @@ The synthesizer must not depend on a running database, so the business rules it 
 mirrored here. tests/test_synthesizer.py checks that these values match the database exactly.
 """
 
+# the same reference data as sql/02 (a test checks they match): departments, and the aliases used to plant messy labels
 DEPARTMENTS = {1: "Human Resources", 2: "Research & Development", 3: "Sales"}
 DEPARTMENT_IDS = {name: dept_id for dept_id, name in DEPARTMENTS.items()}
 DEPARTMENT_ALIASES = {"Human Resources": "HR", "Research & Development": "R&D", "Sales": "Sales Dept"}
@@ -70,6 +71,7 @@ def roles_valid_at(department: str, level: int) -> list[str]:
     return [r for r in DEPARTMENT_ROLES[department] if JOB_ROLES[r][0] <= level <= JOB_ROLES[r][1]]
 
 
+# The salary band (lowest, highest) of a job level.
 def band(level: int) -> tuple[int, int]:
     _, low, high = JOB_LEVELS[level]
     return low, high

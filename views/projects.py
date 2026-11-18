@@ -13,6 +13,7 @@ from src.ui.forms import _choice, _manager_candidates
 
 page_header("Projects")
 show_announcement()
+# the managers for projects and for the lookup lists
 pm, ref = ProjectManager(), ReferenceDataManager()
 
 OPEN_STATUSES = ["Planned", "Active", "On Hold"]
@@ -21,22 +22,26 @@ TABLE_HEADINGS = {"project_code": "Code", "project_name": "Name", "department_na
                   "planned_end_date": "Planned end", "actual_end_date": "Actual end", "budget": "Budget"}
 
 
+# Tab 1: search projects by code, name and status. A fragment redraws only this tab.
 @st.fragment
 def dashboard_tab() -> None:
     c1, c2 = st.columns([2, 1])
     text = c1.text_input("Search by code or name")
     status = c2.selectbox("Status", [None, *OPEN_STATUSES, "Completed", "Cancelled"], format_func=lambda s: s or "Any")
+    # the matching projects
     found = attempt(lambda: pm.search(text, status=status, limit=300))
     if found is not None:
         st.dataframe(found[list(TABLE_HEADINGS)], hide_index=True, width="stretch", column_config=TABLE_HEADINGS)
 
 
+# Reads one project, its row with names, and its team, on one connection.
 def read_project(code: str) -> tuple:
     with pm.read_session():
         project = pm.get_by_code(code)
         return project, pm.search(project.project_code).iloc[0], pm.team(project.project_id)
 
 
+# A short text about the schedule: late, overdue, on time or on schedule.
 def timing(project: Project) -> str:
     if project.delay_days is not None:
         return f"{project.delay_days} days late" if project.is_delayed else "On time"
@@ -45,6 +50,7 @@ def timing(project: Project) -> str:
     return "Closed" if project.is_closed else "On schedule"
 
 
+# The 'Edit details' form for an open project.
 def edit_project(project: Project) -> None:
     managers = _manager_candidates(project.department_id, 3)
     names = dict(zip(managers.employee_id, managers.full_name))
@@ -64,6 +70,7 @@ def edit_project(project: Project) -> None:
         description = st.text_area("Description", project.description or "", max_chars=500)
         submitted = st.form_submit_button("Save changes", type="primary")
     if submitted:
+        # a validated copy with the new values, saved by ProjectManager.update()
         saved = attempt(lambda: pm.update(project.with_changes(
             project_name=name, project_manager_id=None if manager is None else int(manager), status=status,
             priority=priority, planned_end_date=planned_end, budget=Decimal(str(budget)), description=description or None)))
@@ -71,6 +78,7 @@ def edit_project(project: Project) -> None:
             announce("Project updated", f"**{saved.project_code}** · {saved.project_name} was updated.")
 
 
+# The 'Close project' form: Completed or Cancelled, and the end date.
 def close_project(project: Project) -> None:
     with st.form(f"close_project_{project.project_id}"):
         c1, c2 = st.columns(2)
@@ -78,12 +86,14 @@ def close_project(project: Project) -> None:
         on = c2.date_input("Actual end", date.today(), min_value=project.start_date, max_value=date.today())
         submitted = st.form_submit_button("Close project", type="primary")
     if submitted:
+        # close() makes the closed copy; update() saves it and ends the open assignments
         closed = attempt(lambda: pm.update(project.close(outcome, on)))
         if closed:
             announce("Project closed", f"**{closed.project_code}** was closed as {outcome}; its open assignments "
                      f"ended on {on}.")
 
 
+# Tab 2: type a project code to see the project, then edit or close it.
 @st.fragment
 def details_tab() -> None:
     with st.form("project_lookup", border=False):
@@ -94,11 +104,13 @@ def details_tab() -> None:
     code = st.session_state.get("project_code", "").strip()
     if not code:
         return
+    # read the project
     loaded = attempt(lambda: read_project(code))
     if not loaded:
         return
     project, row, team = loaded
     st.markdown(f"### {project.project_code} · {project.project_name}")
+    # the project's details as cards
     fact_cards({
         "Project": [("Status", project.status), ("Priority", project.priority), ("Department", row.department_name),
                     ("Project manager", row.project_manager), ("Description", project.description)],
@@ -149,6 +161,7 @@ def create_tab() -> None:
         status = c2.radio("Status", OPEN_STATUSES[:2], horizontal=True, key=f"create_status_{number}")
         description = st.text_area("Description", max_chars=500, key=f"create_description_{number}")
         if st.button("Create project", type="primary"):
+            # build a Project object (it checks itself) and save it
             created = attempt(lambda: pm.create(Project(
                 project_name=name, department_id=int(department_id), start_date=start, planned_end_date=planned_end,
                 budget=Decimal(budget), status=status, priority=priority, description=description or None,
@@ -158,6 +171,7 @@ def create_tab() -> None:
                 announce("Project created", f"Project **{created.project_code}** · {created.project_name} was created.")
 
 
+# Tab 4: assign an employee to an active project.
 def assign_tab() -> None:
     open_projects = attempt(lambda: pm.search(status="Active", limit=500))
     if open_projects is None or not len(open_projects):
@@ -172,6 +186,7 @@ def assign_tab() -> None:
         start = c1.date_input("From", date.today())
         anyway = c2.checkbox("Assign even if this takes them above 100 %")
         if st.form_submit_button("Assign", type="primary"):
+            # find the employee by code, then save the assignment (refused above 100 % unless ticked)
             def assign():
                 employee = EmployeeManager().get_by_code(code)
                 return pm.assign(Assignment(employee_id=employee.employee_id, project_id=int(project_id),
@@ -185,6 +200,7 @@ def assign_tab() -> None:
                 st.success(f"Assigned ({allocation} %).")
 
 
+# the four tabs
 tab_dashboard, tab_details, tab_create, tab_assign = st.tabs(["Dashboard", "Project details", "Create", "Assign people"])
 with tab_dashboard:
     dashboard_tab()

@@ -10,6 +10,8 @@ from faker import Faker
 from src.synthesizer.config import SynthesizerConfig
 
 
+# OOP (Abstraction + Inheritance): every generator inherits from this abstract class and must write its own
+# generate() (polymorphism). It holds the shared settings, random generator and Faker.
 class BaseGenerator(ABC):
     """Holds the shared configuration, seeded random generator and Faker instance.
 
@@ -17,15 +19,18 @@ class BaseGenerator(ABC):
     reproducible: the same seed always produces the same dataset.
     """
 
+    # Every generator gets the same settings, random generator and Faker.
     def __init__(self, config: SynthesizerConfig, rng: np.random.Generator, faker: Faker) -> None:
         self._config = config
         self._rng = rng
         self._faker = faker
 
+    # Read-only access to the settings (encapsulation: _config is kept internal).
     @property
     def config(self) -> SynthesizerConfig:
         return self._config
 
+    # Each generator returns one table as a pandas DataFrame.
     @abstractmethod
     def generate(self, *args, **kwargs) -> pd.DataFrame:
         """Produce this generator's table."""

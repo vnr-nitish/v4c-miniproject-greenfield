@@ -17,6 +17,7 @@ from src.synthesizer.dataset import SyntheticDataset
 from src.synthesizer.performance import KPI_BANDS
 from src.synthesizer.reference import DEPARTMENT_ROLES, JOB_LEVELS, JOB_ROLES
 
+# reuse the generators' date helper
 full_years = BaseGenerator.full_years
 D = "datetime64[D]"
 
@@ -31,8 +32,11 @@ def markdown_table(df: pd.DataFrame) -> str:
     return "\n".join([header, rule, *body])
 
 
+# Proves the data is valid (every rule checked, 0 violations required) and realistic (compared with the
+# IBM data), and writes docs/synthesis_report.md.
 class SynthesisValidator:
 
+    # Keeps the IBM data and the generated tables; the results go into 'checks' and 'fidelity'.
     def __init__(self, source: pd.DataFrame, data: SyntheticDataset, config, extras: dict) -> None:
         self._src = source
         self._d = data
@@ -43,6 +47,7 @@ class SynthesisValidator:
 
     # ================================================================== rule checks
 
+    # Runs every group of checks.
     def run(self) -> "SynthesisValidator":
         self._check_employees()
         self._check_history()
@@ -51,13 +56,16 @@ class SynthesisValidator:
         self._check_projects()
         return self
 
+    # Records one rule and how many rows break it.
     def _add(self, area: str, rule: str, violations) -> None:
         self.checks.append((area, rule, int(np.sum(violations))))
 
+    # All the broken rows added up; must be 0.
     @property
     def total_violations(self) -> int:
         return sum(v for _, _, v in self.checks)
 
+    # Employee rules: unique code and e-mail, dates that match IBM's age and tenure, adult at hire, pay in band ...
     def _check_employees(self) -> None:
         e = self._d.employees
         ref = e.ref_date.to_numpy().astype(D)
@@ -75,6 +83,7 @@ class SynthesisValidator:
         self._add("employees", "leavers have an exit reason, stayers none",
                   (e.attrition == "Yes") != e.exit_reason.notna())
 
+    # Job history rules: one current version, no gaps, valid department-role pairs, levels, pay and managers.
     def _check_history(self) -> None:
         h = self._d.job_history.sort_values(["emp_idx", "version_number"])
         e = self._d.employees
@@ -144,6 +153,7 @@ class SynthesisValidator:
         self.fidelity.append(("PercentSalaryHike (employees with a salary change)",
                               float(np.mean(np.abs(last - ibm_hike) <= 1) * 100)))
 
+    # Review and survey rules: one per year, only while employed, latest = IBM's, each year close to the IBM mix.
     def _check_reviews_surveys(self) -> None:
         r, s, e = self._d.reviews, self._d.surveys, self._d.employees
         self._add("reviews", "one review per employee per year", r.duplicated(["emp_idx", "year"]))
@@ -189,6 +199,7 @@ class SynthesisValidator:
         high = r.rating.map(lambda rating: KPI_BANDS[rating][3])
         return float(((r.kpi_score == low) | (r.kpi_score == high)).mean())
 
+    # Project and assignment rules: end dates, inside employment, 1-100 %.
     def _check_projects(self) -> None:
         p, a, e = self._d.projects, self._d.assignments, self._d.employees
         closed = p.status.isin(["Completed", "Cancelled"])
@@ -203,6 +214,7 @@ class SynthesisValidator:
 
     # ================================================================== realism comparisons
 
+    # Compares the % of each value in IBM's data and in ours.
     def _share_table(self, column_ibm: str, synthetic: pd.Series) -> pd.DataFrame:
         ibm = self._src[column_ibm].value_counts(normalize=True) * 100
         syn = synthetic.value_counts(normalize=True) * 100
@@ -210,6 +222,7 @@ class SynthesisValidator:
         t["Diff (pp)"] = t["Synthetic %"] - t["IBM %"]
         return t.sort_index()
 
+    # Side-by-side tables, IBM vs synthetic, for the report.
     def comparisons(self) -> dict[str, pd.DataFrame]:
         e = self._d.employees
         out = {}
@@ -236,6 +249,7 @@ class SynthesisValidator:
             "Synthetic": e.groupby("job_level").monthly_income.median()})
         return out
 
+    # How far our correlations are from IBM's: the largest and the average difference.
     def correlation_difference(self) -> tuple[float, float]:
         cols = {"Age": "age", "DistanceFromHome": "distance_from_home", "Education": "education",
                 "EnvironmentSatisfaction": "environment_satisfaction", "JobInvolvement": "job_involvement",
@@ -253,6 +267,7 @@ class SynthesisValidator:
         diff = (ibm - syn).abs().to_numpy()[np.triu_indices(len(ibm), 1)]
         return float(diff.max()), float(diff.mean())
 
+    # Summary numbers about the history, reviews, surveys and projects.
     def history_stats(self) -> dict:
         h, e, r, s, a, p = (self._d.job_history, self._d.employees, self._d.reviews, self._d.surveys,
                             self._d.assignments, self._d.projects)
@@ -301,6 +316,7 @@ class SynthesisValidator:
 
     # ================================================================== report
 
+    # Writes everything above as the Markdown report docs/synthesis_report.md.
     def to_markdown(self, counts: dict, timings: dict, manifest: dict) -> str:
         cfg = self._cfg
         lines = [

@@ -10,16 +10,20 @@ from src.models.review import RATING_LABELS
 from src.ui.common import attempt, note, page_header
 
 page_header("Performance review")
+# the managers for reviews and employees
 rm, em = ReviewManager(), EmployeeManager()
 
 c1, c2 = st.columns(2)
 code = c1.text_input("Employee code", placeholder="EMP000123")
 year = c2.selectbox("Performance year", list(range(date.today().year, 2018, -1)), index=1)
+# find the employee once a code is typed
 employee = attempt(lambda: em.get_by_code(code)) if code else None
 if employee:
+    # the suggested reviewer and project for that year
     suggestion = rm.suggest(employee.employee_id, year)
     st.caption(f"{employee.full_name} · suggested reviewer: {suggestion['reviewer_name'] or '—'} · "
                f"main project that year: {suggestion['project_name'] or '—'}")
+    # the review form; nothing is saved until 'Submit review' is clicked
     with st.form("review"):
         rating = st.segmented_control("Rating", list(RATING_LABELS), format_func=lambda r: f"{r} · {RATING_LABELS[r]}",
                                       default=3)
@@ -33,6 +37,7 @@ if employee:
                              min_value=date(year, 1, 1), max_value=date.today())
         comments = st.text_area("Comments", max_chars=500)
         if st.form_submit_button("Submit review", type="primary"):
+            # build a Review object (it checks itself) and save it in hr_oltp
             saved = attempt(lambda: rm.submit(Review(
                 employee_id=employee.employee_id, reviewer_id=int(reviewer) if reviewer.isdigit() else 0,
                 review_year=int(year), review_date=held, rating_id=int(rating or 3), kpi_score=Decimal(str(kpi)),
@@ -41,6 +46,7 @@ if employee:
             if saved:
                 st.success(f"Review {saved.review_id} saved ({saved.rating_label}).")
     st.markdown("**Reviews on record**")
+    # the employee's earlier reviews
     st.dataframe(rm.reviews_for(employee.employee_id), hide_index=True, width="stretch")
 note("The warehouse is loaded in batches (decision B5): run the ETL from <b>Operations</b> to see new reviews "
      "in the dashboards.")

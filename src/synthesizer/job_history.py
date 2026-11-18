@@ -1,13 +1,6 @@
-"""JobHistoryGenerator — engineers the SCD Type 2 history from IBM tenure columns.
+"""JobHistoryGenerator — builds each employee's past job versions (the SCD Type 2 history) from IBM's tenure.
 
-Each employee's IBM row is their CURRENT state. YearsSinceLastPromotion, YearsInCurrentRole and
-YearsWithCurrManager say when the last promotion, role change and manager change happened. Those
-become dated events, and the history is built BACKWARDS from the current state
-(docs/synthesizer_design.md section 5).
-
-Business rules every generated version satisfies (the same rules the OLTP schema enforces):
-valid department-role pair, level inside the role's range, salary inside the level's band,
-contiguous half-open periods, exactly one open version per employee.
+Every version follows the OLTP rules: valid department-role pair, level and salary in range, no gaps, one open version.
 """
 from __future__ import annotations
 
@@ -17,6 +10,7 @@ import pandas as pd
 from src.synthesizer.base import BaseGenerator
 from src.synthesizer.reference import DEPARTMENT_ROLES, JOB_ROLES, band, roles_valid_at
 
+# an 'open' end date used while computing, and the list of departments
 FAR_FUTURE = np.datetime64("9999-12-31", "D")
 DEPARTMENTS = list(DEPARTMENT_ROLES)
 
@@ -41,9 +35,12 @@ def pick_previous_role(rng: np.random.Generator, options: list[tuple[str, str]])
     return options[rng.choice(len(options), p=weights / weights.sum())]
 
 
+# Table 2 of 6 (-> hr_oltp.employee_job_history). IBM only has today's job, so the past is rebuilt from its
+# Years... columns: each promotion, transfer or manager change starts a new version (the SCD Type 2 history).
 class JobHistoryGenerator(BaseGenerator):
 
     def generate(self, employees: pd.DataFrame) -> pd.DataFrame:
+        # 1. when the promotions, role changes and manager changes happened; 2. the versions; 3. a manager for each
         events = self._event_dates(employees)
         history = self._build_versions(employees, events)
         self._assign_managers(employees, history)
@@ -59,12 +56,14 @@ class JobHistoryGenerator(BaseGenerator):
         years = {"role": emp.years_in_current_role.to_numpy(),
                  "promo": emp.years_since_last_promotion.to_numpy(),
                  "mgr": emp.years_with_curr_manager.to_numpy()}
+        # a random day within the year for each event
         offset = {k: self._rng.integers(0, 360, n) for k in years}
         # events in the same year share one date (they become one version)
         offset["promo"] = np.where(years["promo"] == years["role"], offset["role"], offset["promo"])
         offset["mgr"] = np.where(years["mgr"] == years["role"], offset["role"],
                                  np.where(years["mgr"] == years["promo"], offset["promo"], offset["mgr"]))
         dates = {}
+        # years before the reference date; none if equal to the years at the company (that means 'since hire')
         for k, y in years.items():
             d = self.years_before(ref, y, offset[k])
             dates[k] = np.where(y < yac, d, np.datetime64("NaT"))   # y == YearsAtCompany: since hire
@@ -78,6 +77,7 @@ class JobHistoryGenerator(BaseGenerator):
         rows = []
         cols = ["department", "job_role", "job_level", "monthly_income", "stock_option_level",
                 "business_travel", "hire_date", "percent_salary_hike"]
+        # the columns as plain arrays: much faster inside the loop below
         data = {c: emp[c].to_numpy() for c in cols}
         data["prior_experience"] = (emp.total_working_years - emp.years_at_company).to_numpy()
         data["years_in_current_role"] = emp.years_in_current_role.to_numpy()
@@ -85,6 +85,7 @@ class JobHistoryGenerator(BaseGenerator):
         data["years_at_company"] = emp.years_at_company.to_numpy()
         exit_or_end = emp.exit_date.to_numpy().astype("datetime64[D]")
 
+        # one employee at a time: start from today's job and walk back through the events
         for i in range(len(emp)):
             dept, role, level = data["department"][i], data["job_role"][i], int(data["job_level"][i])
             income = float(data["monthly_income"][i])
@@ -97,11 +98,13 @@ class JobHistoryGenerator(BaseGenerator):
             salary_event_seen = False
             backwards = []          # (start, dept, role, level, income, reason, manager_boundary, pay_grade)
 
+            # newest event first: work out what the job was BEFORE it
             for d in sorted(on_date, reverse=True):
                 kinds = on_date[d]
                 promo, role_chg = "promo" in kinds, "role" in kinds
                 prev_level = level
                 pay_grade = False
+                # a promotion: one level lower before it (or only a pay rise if the role can't go lower)
                 if promo and level > 1:
                     if role_chg or level - 1 >= JOB_ROLES[role][0]:
                         prev_level = level - 1
@@ -111,15 +114,14 @@ class JobHistoryGenerator(BaseGenerator):
                     pay_grade = True            # level 1 cannot fall further (finding F8)
 
                 prev_dept, prev_role = dept, role
+                # a role change: pick the role held before, in the same department or sometimes another one (a transfer)
                 if role_chg:
                     same_dept = [(dept, r) for r in roles_valid_at(dept, prev_level) if r != role]
-                    # A transfer always brings a new manager, so it is only consistent with IBM when the
-                    # current manager started at or after this role change (YearsWithCurrManager <=
-                    # YearsInCurrentRole). It is forced when no other role exists in the department.
+                    # A transfer brings a new manager, so it is only allowed when YearsWithCurrManager <=
+                    # YearsInCurrentRole; it is forced when no other role exists in the department.
                     transfer_ok = data["years_with_curr_manager"][i] <= data["years_in_current_role"][i]
-                    # transfer options: another department, and the role must change too (otherwise
-                    # YearsInCurrentRole would not be reproducible). A level-5 R&D Manager, for example,
-                    # has none: every other department's level-5 role is also Manager.
+                    # transfer options: another department and a different role (a level-5 R&D Manager
+                    # has none, because every other department's level-5 role is also Manager)
                     transfers = [(dp, r) for dp in DEPARTMENTS if dp != dept
                                  for r in roles_valid_at(dp, prev_level) if r != role]
                     wants_transfer = not same_dept or (transfer_ok and rng.random() < transfer_share)
@@ -128,6 +130,7 @@ class JobHistoryGenerator(BaseGenerator):
                     elif same_dept:
                         prev_dept, prev_role = pick_previous_role(rng, same_dept)
 
+                # the pay before the event = today's pay divided by the raise (IBM's last raise for the latest event)
                 changes_salary = promo or role_chg
                 if changes_salary:
                     if not salary_event_seen:
@@ -144,8 +147,8 @@ class JobHistoryGenerator(BaseGenerator):
                 else:
                     prev_income = income
 
-                # "Promotion" wins over "Transfer": the last promotion is found by its reason, while a
-                # transfer remains visible as a department change.
+                # the change reason of the newer version: "Promotion" wins over "Transfer" (a transfer
+                # still shows as a department change)
                 if promo:
                     reason = "Promotion"
                 elif prev_dept != dept:
@@ -155,13 +158,12 @@ class JobHistoryGenerator(BaseGenerator):
                 else:
                     reason = "Manager Change"
                 boundary = ("mgr" in kinds) or prev_dept != dept
+                # remember that version, then continue with the earlier job
                 backwards.append((d, dept, role, level, income, reason, boundary, pay_grade, False))
                 dept, role, level, income = prev_dept, prev_role, prev_level, prev_income
 
-            # decision D24 — career depth: IBM fixes only the LAST promotion's date, so a long career
-            # can contain earlier promotions. If the hire-era level is implausibly senior for the
-            # experience the person had when hired, add earlier promotions between the hire date and
-            # the first IBM-dated event (never touching any IBM tenure value).
+            # decision D24: IBM dates only the LAST promotion, so if the hire-time level is too senior for
+            # the person's experience, add earlier promotions before the first IBM-dated event.
             hire_date = np.datetime64(data["hire_date"][i], "D")
             ever_promoted = not np.isnat(events["promo"][i])
             target = plausible_hire_level(int(data["prior_experience"][i]))
@@ -185,12 +187,15 @@ class JobHistoryGenerator(BaseGenerator):
                         backwards.append((d, dept, role, level, income, "Promotion", False, False, True))
                         role, level, income = prev_role, prev_level, prev_income
 
+            # the first version: from the hire date, reason 'Hire'
             backwards.append((data["hire_date"][i], dept, role, level, income, "Hire", True, False, False))
+            # turn the list around: oldest first; each version ends when the next one starts
             versions = backwards[::-1]
             for v, (start, dp, rl, lv, inc, reason, boundary, pay_grade, career_step) in enumerate(versions):
                 end = versions[v + 1][0] if v + 1 < len(versions) else np.datetime64("NaT")
                 rows.append((i, v + 1, dp, rl, lv, inc, reason, start, end, boundary, pay_grade, career_step))
 
+        # all the versions of all employees as one table
         hist = pd.DataFrame(rows, columns=["emp_idx", "version_number", "department", "job_role", "job_level",
                                            "monthly_income", "change_reason", "effective_start_date",
                                            "effective_end_date", "manager_boundary", "pay_grade_promotion",
@@ -232,6 +237,7 @@ class JobHistoryGenerator(BaseGenerator):
         ve = np.where(np.isnat(ve), FAR_FUTURE, ve)
         c_emp = hist.emp_idx.to_numpy()
         c_lvl = hist.job_level.to_numpy()
+        # possible managers per department and level: people at a higher level
         pools = {}
         for d in DEPARTMENTS:
             in_dept = np.flatnonzero((hist.department.to_numpy() == d) & (c_lvl >= 2))
@@ -250,6 +256,7 @@ class JobHistoryGenerator(BaseGenerator):
         manager = np.full(len(seg), -1, dtype=np.int64)
         unassigned = 0
         seg_emp = seg.emp_idx.to_numpy()
+        # for every period with one manager: pick a valid manager
         for k, (e, d, s, en, need) in enumerate(zip(seg_emp, seg.department, seg.start, seg.end, seg.max_level)):
             # a new segment means a manager change: never pick the previous manager again
             prev_mgr = manager[k - 1] if k > 0 and seg_emp[k - 1] == e else -2
@@ -260,6 +267,8 @@ class JobHistoryGenerator(BaseGenerator):
                 unassigned += 1
                 continue
 
+            # a valid manager: in that job when the period starts, not the employee, not the previous manager,
+            # and employed for the whole period
             def ok(idx: np.ndarray) -> np.ndarray:
                 good = (vs[idx] <= s) & (ve[idx] > s) & (c_emp[idx] != e) & (c_emp[idx] != prev_mgr)
                 good &= emp_end[c_emp[idx]] >= en           # employed for the whole segment
@@ -273,6 +282,7 @@ class JobHistoryGenerator(BaseGenerator):
                 if len(hit):
                     manager[k] = c_emp[hit[0]]
                     continue
+            # try 40 random candidates first (fast); if none fits, check the whole pool
             sample = pool[rng.integers(0, len(pool), size=min(40, len(pool)))]
             hit = sample[ok(sample)]
             if not len(hit):
@@ -289,6 +299,7 @@ class JobHistoryGenerator(BaseGenerator):
                                .merge(seg[["emp_idx", "segment", "manager_idx"]], on=["emp_idx", "segment"],
                                       how="left").manager_idx.to_numpy())
         codes = emp.employee_code.to_numpy()
+        # store the manager's employee code on every version
         hist["manager_code"] = np.where(hist.manager_idx >= 0, codes[np.maximum(hist.manager_idx, 0)], None)
         self.unassigned_segments = unassigned
         self.department_heads = {d: codes[i] for d, i in heads.items()}

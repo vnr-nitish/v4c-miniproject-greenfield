@@ -1,12 +1,10 @@
-"""Schema tests: prove that the integrity rules of the design are enforced by MySQL itself.
+"""Schema tests: prove that MySQL itself enforces the design's integrity rules.
 
-Structure tests check that the schema was built as designed. Positive tests check that valid
-data is accepted. Negative tests deliberately insert invalid data and assert that MySQL rejects
-it with the expected error code:
-    1062 duplicate key · 1451 parent row still referenced · 1452 missing parent row
-    3819 CHECK constraint violated
-Every test runs inside a transaction that is rolled back (see conftest.py). 
+Negative tests insert invalid data and expect MySQL's error code (1062 duplicate, 1451/1452 foreign key, 3819 CHECK).
+Every test runs inside a transaction that is rolled back (see conftest.py).
 """
+# How to read this file: each 'test_' function is one check that pytest runs; 'assert X' means X must be true.
+# A parameter such as 'cur' is a fixture, prepared first by a function marked @pytest.fixture.
 import itertools
 from datetime import date
  
@@ -144,18 +142,21 @@ def full_years(start, end):
 
 # ----------------------------------------------------------------------------- structure
 
+# Test: OLTP has 14 tables.
 def test_oltp_has_14_tables(cur):
     cur.execute("SELECT COUNT(*) FROM information_schema.tables "
                 "WHERE table_schema = 'hr_oltp' AND table_type = 'BASE TABLE'")
     assert cur.fetchone()[0] == 14
 
 
+# Test: warehouse has 8 tables.
 def test_dw_has_8_tables(cur):
     cur.execute("SELECT COUNT(*) FROM information_schema.tables "
                 "WHERE table_schema = 'hr_dw' AND table_type = 'BASE TABLE'")
     assert cur.fetchone()[0] == 8
 
 
+# Test: reference data row counts.
 @pytest.mark.parametrize("table, expected", [
     ("departments", 3), ("job_levels", 5), ("job_roles", 9), ("department_job_roles", 11),
     ("education_levels", 5), ("education_fields", 6), ("performance_rating_levels", 4), ("exit_reasons", 9),
@@ -165,6 +166,7 @@ def test_reference_data_row_counts(cur, table, expected):
     assert cur.fetchone()[0] == expected
 
 
+# Test: every foreign key is restrict.
 def test_every_foreign_key_is_restrict(cur):
     cur.execute("SELECT constraint_schema, constraint_name, delete_rule, update_rule "
                 "FROM information_schema.referential_constraints "
@@ -174,6 +176,7 @@ def test_every_foreign_key_is_restrict(cur):
     assert all(r[2] == "RESTRICT" and r[3] == "RESTRICT" for r in rows), rows
 
 
+# Test: project special member exists.
 def test_project_special_member_exists(cur):
     cur.execute("SELECT project_sk, project_id, project_name FROM hr_dw.dim_project WHERE project_sk = -1")
     assert cur.fetchone() == (-1, 0, "No Project Assigned")
@@ -181,6 +184,7 @@ def test_project_special_member_exists(cur):
 
 # ----------------------------------------------------------------------------- positive
 
+# Test: valid employee lifecycle is accepted.
 def test_valid_employee_lifecycle_is_accepted(cur):
     manager = add_employee(cur, hire_date=date(2010, 3, 1), date_of_birth=date(1980, 1, 1))
     add_job(cur, manager, department_id=RND, job_role_id=MANAGER, job_level_id=4,
@@ -206,6 +210,7 @@ def test_valid_employee_lifecycle_is_accepted(cur):
     assert cur.fetchone()[0] == 2024       # generated from survey_date
 
 
+# Test: snapshot view rebuilds IBM style columns.
 def test_snapshot_view_rebuilds_ibm_style_columns(cur):
     mgr_a = add_employee(cur, hire_date=date(2010, 1, 1), date_of_birth=date(1975, 1, 1))
     add_job(cur, mgr_a, job_role_id=MANAGER, job_level_id=4, monthly_income=15000,
@@ -246,31 +251,38 @@ def test_snapshot_view_rebuilds_ibm_style_columns(cur):
 
 # ----------------------------------------------------------------------------- negative: employees
 
+# Test: rejects hire before age 18.
 def test_rejects_hire_before_age_18(cur):
     expect_error(cur, EMPLOYEE_SQL, employee_row(date_of_birth=date(2000, 6, 1), hire_date=date(2017, 6, 1)),
                  CHECK_VIOLATED)
 
 
+# Test: rejects exit before hire.
 def test_rejects_exit_before_hire(cur):
     expect_error(cur, EMPLOYEE_SQL, employee_row(exit_date=date(2014, 12, 31), exit_reason_id=1), CHECK_VIOLATED)
 
 
+# Test: rejects exit date without reason.
 def test_rejects_exit_date_without_reason(cur):
     expect_error(cur, EMPLOYEE_SQL, employee_row(exit_date=date(2020, 5, 1), exit_reason_id=None), CHECK_VIOLATED)
 
 
+# Test: rejects exit reason without exit date.
 def test_rejects_exit_reason_without_exit_date(cur):
     expect_error(cur, EMPLOYEE_SQL, employee_row(exit_date=None, exit_reason_id=1), CHECK_VIOLATED)
 
 
+# Test: rejects unknown gender.
 def test_rejects_unknown_gender(cur):
     expect_error(cur, EMPLOYEE_SQL, employee_row(gender="X"), CHECK_VIOLATED)
 
 
+# Test: rejects malformed employee code.
 def test_rejects_malformed_employee_code(cur):
     expect_error(cur, EMPLOYEE_SQL, employee_row(employee_code="E12345"), CHECK_VIOLATED)
 
 
+# Test: rejects duplicate email.
 def test_rejects_duplicate_email(cur):
     add_employee(cur, email="same@example.com")
     expect_error(cur, EMPLOYEE_SQL, employee_row(email="same@example.com"), DUPLICATE_KEY)
@@ -278,12 +290,14 @@ def test_rejects_duplicate_email(cur):
 
 # ----------------------------------------------------------------------------- negative: job history
 
+# Test: rejects invalid department role pair.
 def test_rejects_invalid_department_role_pair(cur):
     emp = add_employee(cur)
     err = expect_error(cur, JOB_SQL, job_row(emp, department_id=RND, job_role_id=SALES_EXECUTIVE), NO_PARENT)
     assert "fk_ejh_department_role" in err.msg
 
 
+# Test: rejects second current version.
 def test_rejects_second_current_version(cur):
     emp = add_employee(cur)
     add_job(cur, emp, effective_start_date=date(2015, 1, 1))
@@ -291,6 +305,7 @@ def test_rejects_second_current_version(cur):
     assert "uq_ejh_current_version" in err.msg
 
 
+# Test: accepts closed versions plus one current.
 def test_accepts_closed_versions_plus_one_current(cur):
     emp = add_employee(cur)
     add_job(cur, emp, effective_start_date=date(2015, 1, 1), effective_end_date=date(2017, 1, 1))
@@ -302,17 +317,20 @@ def test_accepts_closed_versions_plus_one_current(cur):
     assert cur.fetchone() == (3, 1)
 
 
+# Test: rejects version ending before it starts.
 def test_rejects_version_ending_before_it_starts(cur):
     emp = add_employee(cur)
     expect_error(cur, JOB_SQL, job_row(emp, effective_start_date=date(2018, 1, 1),
                                        effective_end_date=date(2017, 1, 1)), CHECK_VIOLATED)
 
 
+# Test: rejects employee as own manager.
 def test_rejects_employee_as_own_manager(cur):
     emp = add_employee(cur)
     expect_error(cur, JOB_SQL, job_row(emp, manager_id=emp), CHECK_VIOLATED)
 
 
+# Test: rejects unknown change reason.
 def test_rejects_unknown_change_reason(cur):
     emp = add_employee(cur)
     expect_error(cur, JOB_SQL, job_row(emp, change_reason="Reorg"), CHECK_VIOLATED)
@@ -320,6 +338,7 @@ def test_rejects_unknown_change_reason(cur):
 
 # ----------------------------------------------------------------------------- negative: surveys, reviews, projects
 
+# Test: rejects survey score outside 1 to 4.
 @pytest.mark.parametrize("column", ["environment_satisfaction", "job_satisfaction", "relationship_satisfaction",
                                     "job_involvement", "work_life_balance"])
 def test_rejects_survey_score_outside_1_to_4(cur, column):
@@ -327,34 +346,40 @@ def test_rejects_survey_score_outside_1_to_4(cur, column):
     expect_error(cur, SURVEY_SQL, survey_row(emp, **{column: 5}), CHECK_VIOLATED)
 
 
+# Test: rejects second survey in same year.
 def test_rejects_second_survey_in_same_year(cur):
     emp = add_employee(cur)
     cur.execute(SURVEY_SQL, survey_row(emp, survey_date=date(2024, 3, 1)))
     expect_error(cur, SURVEY_SQL, survey_row(emp, survey_date=date(2024, 9, 1)), DUPLICATE_KEY)
 
 
+# Test: rejects self review.
 def test_rejects_self_review(cur):
     emp = add_employee(cur)
     expect_error(cur, REVIEW_SQL, review_row(emp, emp), CHECK_VIOLATED)
 
 
+# Test: rejects KPI score above 100.
 def test_rejects_kpi_score_above_100(cur):
     emp, reviewer = add_employee(cur), add_employee(cur)
     expect_error(cur, REVIEW_SQL, review_row(emp, reviewer, kpi_score=101), CHECK_VIOLATED)
 
 
+# Test: rejects second review in same year.
 def test_rejects_second_review_in_same_year(cur):
     emp, reviewer = add_employee(cur), add_employee(cur)
     cur.execute(REVIEW_SQL, review_row(emp, reviewer))
     expect_error(cur, REVIEW_SQL, review_row(emp, reviewer, review_date=date(2025, 2, 1)), DUPLICATE_KEY)
 
 
+# Test: rejects review held outside its cycle.
 def test_rejects_review_held_outside_its_cycle(cur):
     emp, reviewer = add_employee(cur), add_employee(cur)
     expect_error(cur, REVIEW_SQL, review_row(emp, reviewer, review_year=2022, review_date=date(2025, 1, 10)),
                  CHECK_VIOLATED)
 
 
+# Test: rejects allocation outside 1 to 100.
 @pytest.mark.parametrize("allocation", [0, 101])
 def test_rejects_allocation_outside_1_to_100(cur, allocation):
     emp = add_employee(cur)
@@ -365,10 +390,12 @@ def test_rejects_allocation_outside_1_to_100(cur, allocation):
                  CHECK_VIOLATED)
 
 
+# Test: rejects completed project without actual end date.
 def test_rejects_completed_project_without_actual_end_date(cur):
     expect_error(cur, PROJECT_SQL, project_row(status="Completed", actual_end_date=None), CHECK_VIOLATED)
 
 
+# Test: rejects deleting department in use.
 def test_rejects_deleting_department_in_use(cur):
     emp = add_employee(cur)
     add_job(cur, emp, department_id=RND)
@@ -393,6 +420,7 @@ VALUES
 """
 
 
+# Test: warehouse rejects two current versions.
 def test_dw_rejects_two_current_versions(cur):
     cur.execute(DIM_EMPLOYEE_SQL, dict(employee_id=900001, start_date="2015-01-01", end_date="9999-12-31",
                                        is_current=True, version_number=1))
@@ -402,17 +430,20 @@ def test_dw_rejects_two_current_versions(cur):
     assert "uq_dim_employee_current" in err.msg
 
 
+# Test: warehouse rejects current flag inconsistent with end date.
 def test_dw_rejects_current_flag_inconsistent_with_end_date(cur):
     expect_error(cur, DIM_EMPLOYEE_SQL, dict(employee_id=900002, start_date="2015-01-01", end_date="2017-12-31",
                                              is_current=True, version_number=1), CHECK_VIOLATED)
 
 
+# Test: warehouse rejects second special project member.
 def test_dw_rejects_second_special_project_member(cur):
     expect_error(cur, "INSERT INTO hr_dw.dim_project (project_id, project_code, project_name, "
                       "owning_department_name, status, priority, budget_band) "
                       "VALUES (0, 'N/A', 'Another', 'N/A', 'N/A', 'N/A', 'N/A')", None, DUPLICATE_KEY)
 
 
+# Test: warehouse rejects fact with unknown employee.
 def test_dw_rejects_fact_with_unknown_employee(cur):
     # works on an empty and on a loaded warehouse: the date and department rows may already exist
     cur.execute("INSERT IGNORE INTO hr_dw.dim_date VALUES (20250120, '2025-01-20', 20, 'Monday', 1, FALSE, 4, 1, "

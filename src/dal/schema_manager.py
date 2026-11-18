@@ -1,12 +1,6 @@
 """SchemaManager — builds and updates the database schemas from the numbered scripts in sql/.
 
-The same code builds the local database and, later, the cloud database — only the credentials
-in .env differ. Like every manager it inherits from DatabaseConnection, so no part of the
-application connects to MySQL outside the shared Singleton pool.
-
-Safety: the DDL scripts drop and recreate tables. If any selected script drops tables and a table
-in PROTECTED_TABLES already contains rows, install() refuses unless force=True. View and
-procedure scripts never drop tables, so they can be re-run at any time.
+Tables that already hold data are never dropped unless force=True; view and procedure scripts can be re-run any time.
 """
 from __future__ import annotations
 
@@ -22,6 +16,7 @@ import mysql.connector
 from src.db_manager import PROJECT_ROOT, DatabaseConnection
 from src.exceptions import BusinessRuleError, DatabaseError, NotFoundError
 
+# where the numbered SQL files are
 SQL_DIR = PROJECT_ROOT / "sql"
 
 # Tables holding loaded business data. Reference / lookup tables are not listed: rebuilding them
@@ -35,21 +30,26 @@ PROTECTED_TABLES = [
 ]
 
 
+# One file from sql/ (00 to 08), split into single statements, because MySQL runs them one at a time.
 @dataclass(frozen=True)
 class SqlScript:
     """One numbered SQL file, split into the statements MySQL executes one at a time."""
 
+    # the file, and its whole text
     path: Path
     text: str
 
+    # Reads one SQL file.
     @classmethod
     def load(cls, path: Path) -> "SqlScript":
         return cls(path, path.read_text(encoding="utf-8"))
 
+    # e.g. '04_dw_ddl.sql'
     @property
     def name(self) -> str:
         return self.path.name
 
+    # e.g. '04', as used by --only
     @property
     def number(self) -> str:
         return self.path.name[:2]
@@ -59,6 +59,7 @@ class SqlScript:
         """True if the script drops tables (the view and procedure scripts do not)."""
         return re.search(r"\bDROP\s+TABLE\b", self.text, re.IGNORECASE) is not None
 
+    # The file split into statements; worked out once, then remembered (cached_property).
     @cached_property
     def statements(self) -> list[str]:
         return self.split(self.text)
@@ -72,13 +73,17 @@ class SqlScript:
         procedures keep their comments on the server; a chunk that contains only comments is not
         a statement.
         """
+        # the statements found so far, and the text of the current one
         statements: list[str] = []
         buf: list[str] = []
         has_code = False
+        # the character that ends a statement; the procedure files change it to $$
         delimiter = ";"
+        # while inside a quoted string: which quote character opened it
         quote: str | None = None
         i, n = 0, len(script)
 
+        # walk through the script one character at a time
         while i < n:
             ch = script[i]
 
@@ -93,6 +98,7 @@ class SqlScript:
                 i += 1
                 continue
 
+            # a DELIMITER line (e.g. DELIMITER $$) changes the delimiter; it isn't sent to MySQL
             line_start = script.rfind("\n", 0, i) + 1
             if not script[line_start:i].strip() and script[i:i + 9].upper() == "DELIMITER" \
                     and i + 9 < n and script[i + 9] in " \t":
@@ -102,24 +108,28 @@ class SqlScript:
                 i = end + 1
                 continue
 
+            # a comment: keep it in the statement text and skip to the end of the line
             if script.startswith("--", i) and (i + 2 >= n or script[i + 2] in " \t\r\n") or ch == "#":
                 end = script.find("\n", i)
                 end = n if end == -1 else end + 1
                 buf.append(script[i:end])
                 i = end
                 continue
+            # a /* ... */ comment
             if script.startswith("/*", i):
                 end = script.find("*/", i + 2)
                 end = n if end == -1 else end + 2
                 buf.append(script[i:end])
                 i = end
                 continue
+            # a quote starts a string
             if ch in ("'", '"', "`"):
                 quote = ch
                 buf.append(ch)
                 has_code = True
                 i += 1
                 continue
+            # the delimiter ends the statement
             if script.startswith(delimiter, i):
                 if has_code:
                     statements.append("".join(buf).strip())
@@ -144,11 +154,14 @@ class SqlScript:
         return statement.strip().splitlines()[0]
 
 
+# Builds the database by running the numbered SQL files in order; scripts/setup_database.py uses it. The
+# same command built the local MySQL database and the Aiven cloud database: only .env differed.
 class SchemaManager(DatabaseConnection):
     """Runs the numbered SQL scripts: schemas, tables, reference data, views, procedures."""
 
     def scripts(self, only: Sequence[str] | None = None, directory: Path = SQL_DIR) -> list[SqlScript]:
         """The numbered scripts in order — all of them, or those whose number is in `only`."""
+        # the files whose names start with two digits, in number order
         paths = sorted(directory.glob("[0-9][0-9]_*.sql"))
         if only:
             paths = [p for p in paths if p.name[:2] in only]
@@ -165,6 +178,7 @@ class SchemaManager(DatabaseConnection):
         """The protected tables that exist and contain at least one row."""
         found = []
         with self.transaction() as cur:
+            # for each important table: does it exist, and does it have at least one row?
             for schema, table in PROTECTED_TABLES:
                 cur.execute("SELECT COUNT(*) FROM information_schema.tables "
                             "WHERE table_schema = %s AND table_name = %s", (schema, table))
@@ -175,6 +189,7 @@ class SchemaManager(DatabaseConnection):
                     found.append(f"{schema}.{table}")
         return found
 
+    # Safety first: refuse to drop tables that already hold data, unless --force is given.
     def install(self, scripts: Sequence[SqlScript], force: bool = False,
                 progress: Callable[[SqlScript, int, float], None] | None = None) -> int:
         """Run the scripts in order; returns the number of statements executed.
@@ -187,6 +202,7 @@ class SchemaManager(DatabaseConnection):
             if data:
                 raise BusinessRuleError("Refusing to rebuild: these tables contain data -> " + ", ".join(data)
                                         + "\nRe-run with --force if you really want to drop and recreate them.")
+        # run the files one by one and count the statements
         total = 0
         for script in scripts:
             started = time.perf_counter()
@@ -200,9 +216,11 @@ class SchemaManager(DatabaseConnection):
         """Execute one script's statements on one connection and commit (DDL commits implicitly).
         A failing statement stops the script with its file name, first line and MySQL's error."""
         with self.transaction() as cur:
+            # run each statement on the same connection
             for statement in script.statements:
                 try:
                     cur.execute(statement)
+                    # a statement that returns rows: read them, so the connection is free for the next one
                     if cur.with_rows:
                         cur.fetchall()
                 except mysql.connector.Error as err:

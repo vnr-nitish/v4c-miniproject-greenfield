@@ -6,6 +6,7 @@ import pandas as pd
 from src.db_manager import DatabaseConnection
 from src.exceptions import NotFoundError
 
+# One SELECT per drop-down list; the key is the list's name.
 _QUERIES = {
     "departments": "SELECT department_id, department_code, department_name "
                    "FROM hr_oltp.departments ORDER BY department_name",
@@ -23,38 +24,47 @@ _QUERIES = {
 }
 
 
+# OOP (Inheritance + Encapsulation): the lookup lists behind the forms' drop-downs. Each list is read once
+# and kept in memory inside the object, so forms open quickly.
 class ReferenceDataManager(DatabaseConnection):
     """Read-only access to the reference tables. They change rarely, so each list is read once
     and cached for the lifetime of the application; refresh() reloads them."""
 
+    # Creates the cache only once (the object is a Singleton, but __init__ runs on every call).
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         if not hasattr(self, "_cache"):           # a Singleton: __init__ runs on every ReferenceDataManager()
             self._cache: dict[str, pd.DataFrame] = {}
 
+    # Returns a list from the cache; reads it from the database only the first time.
     def _lookup(self, name: str) -> pd.DataFrame:
         if name not in self._cache:
             self._cache[name] = self.fetch_frame(_QUERIES[name])
         return self._cache[name].copy()           # callers may not change the cached list
 
+    # Empties the cache, so the lists are read again.
     def refresh(self) -> None:
         self._cache.clear()
 
     def preload(self) -> None:
         """Read every list that is not cached yet, on one connection, so a form can draw all its
         fields together instead of reading a list between one field and the next."""
+        # the lists not read yet
         missing = [name for name in _QUERIES if name not in self._cache]
         if missing:
+            # read them all on one connection
             with self.read_session():
                 for name in missing:
                     self._lookup(name)
 
+    # Each method below returns one list for a drop-down.
     def departments(self) -> pd.DataFrame:
         return self._lookup("departments")
 
     def roles_for(self, department_id: int) -> pd.DataFrame:
         """The job roles offered in a department, with their allowed level range."""
         roles = self._lookup("job_roles")
+        # keep only that department's rows
         return roles[roles.department_id == department_id].reset_index(drop=True)
 
     def levels_for(self, job_role_id: int) -> pd.DataFrame:
@@ -65,6 +75,7 @@ class ReferenceDataManager(DatabaseConnection):
             raise NotFoundError(f"Job role {job_role_id} not found")
         role = matches.iloc[0]
         levels = self._lookup("job_levels")
+        # keep the levels from the role's lowest to its highest level
         return levels[levels.job_level_id.between(role.min_job_level_id, role.max_job_level_id)].reset_index(drop=True)
 
     def job_levels(self) -> pd.DataFrame:

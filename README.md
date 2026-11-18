@@ -186,6 +186,7 @@ python -m pytest tests/test_models.py -q   # entity rules only — no database n
 data and never change it; they skip themselves when MySQL or the loaded data is missing.
 
 ## Design documentation
+- [`docs/code_walkthrough.md`](docs/code_walkthrough.md) — start here: what happens when a form is saved and when a page loads, where the 6 tables are generated (Faker), how the SQL reached the cloud, and the OOP concepts, each linked to its line of code
 - [`docs/oltp_design.md`](docs/oltp_design.md) — data dictionary, profiling findings, normalized OLTP design (§14: why more than five tables)
 - [`docs/dw_design.md`](docs/dw_design.md) — star schema, SCD Type 2, surrogate keys
 - [`docs/synthesizer_design.md`](docs/synthesizer_design.md) — how 1,470 rows become 100,000 realistic employees

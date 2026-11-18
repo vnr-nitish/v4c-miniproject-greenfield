@@ -7,6 +7,7 @@ import pandas as pd
 
 from src.exceptions import ValidationError
 
+# the 35 columns the IBM file must have
 EXPECTED_COLUMNS = [
     "Age", "Attrition", "BusinessTravel", "DailyRate", "Department", "DistanceFromHome", "Education",
     "EducationField", "EmployeeCount", "EmployeeNumber", "EnvironmentSatisfaction", "Gender", "HourlyRate",
@@ -18,19 +19,23 @@ EXPECTED_COLUMNS = [
 ]
 
 
+# Reads the IBM CSV (data/raw) and checks it before anything is generated from it.
 class IBMSourceData:
     """The 1,470-row IBM snapshot, validated before anything is generated from it."""
 
+    # Remembers where the file is; it's read only when first needed.
     def __init__(self, path: Path) -> None:
         self._path = Path(path)
         self._frame: pd.DataFrame | None = None
 
+    # The IBM table, read and checked the first time it's asked for.
     @property
     def frame(self) -> pd.DataFrame:
         if self._frame is None:
             self._frame = self._load()
         return self._frame
 
+    # Reads the CSV and checks it.
     def _load(self) -> pd.DataFrame:
         if not self._path.exists():
             raise ValidationError(f"Source file not found: {self._path}")
@@ -38,6 +43,7 @@ class IBMSourceData:
         self._validate(df)
         return df
 
+    # Checks: every column present, no empty cells, a unique EmployeeNumber, and the tenure rules.
     @staticmethod
     def _validate(df: pd.DataFrame) -> None:
         missing = set(EXPECTED_COLUMNS) - set(df.columns)

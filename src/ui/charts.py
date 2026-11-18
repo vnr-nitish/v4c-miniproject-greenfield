@@ -23,6 +23,7 @@ LABELS = {"priority": "Priority", "budget_band": "Budget band", "department": "D
           "owning_department_name": "Department", "status": "Status", "budget": "Budget", "team_avg_kpi": "Team avg KPI"}
 
 
+# Sets the chart's height and title.
 def _finish(fig: go.Figure, height: int = 380, title: str = "") -> go.Figure:
     fig.update_layout(height=height, title=dict(text=title, x=0.01, font=dict(size=15)))
     return fig
@@ -30,10 +31,12 @@ def _finish(fig: go.Figure, height: int = 380, title: str = "") -> go.Figure:
 
 def headcount_treemap(workforce: pd.DataFrame) -> go.Figure:
     """Department -> job role, sized by headcount, coloured by the share of High / Very high risk."""
+    # count the people per department and role, and the share at high risk
     data = (workforce.assign(at_risk=workforce.band_order >= 3)
             .groupby(["department_name", "job_role"], as_index=False)
             .agg(employees=("employee_id", "size"), at_risk_pct=("at_risk", "mean")))
     data["at_risk_pct"] = (100 * data.at_risk_pct).round(1)
+    # boxes sized by headcount and coloured by risk
     fig = px.treemap(data, path=[px.Constant("Company"), "department_name", "job_role"], values="employees",
                      color="at_risk_pct", color_continuous_scale=theme.RISK_SCALE,
                      hover_data={"at_risk_pct": ":.1f"})
@@ -42,12 +45,14 @@ def headcount_treemap(workforce: pd.DataFrame) -> go.Figure:
     return _finish(fig, 430, "Headcount by department and role · colour = share at high risk")
 
 
+# A ring chart: the share of each part, e.g. employees per risk band.
 def donut(frame: pd.DataFrame, names: str, values: str, colors: dict, title: str) -> go.Figure:
     fig = px.pie(frame, names=names, values=values, hole=.62, color=names, color_discrete_map=colors)
     fig.update_traces(textinfo="percent", sort=False)
     return _finish(fig, 430, title)                 # as tall as the treemap beside it
 
 
+# A line chart with one line per group (e.g. per department), used for the trends.
 def lines(frame: pd.DataFrame, x: str, y: str, color: str | None = None, title: str = "") -> go.Figure:
     fig = px.line(frame, x=x, y=y, color=color, markers=True, color_discrete_map=theme.DEPARTMENT_COLORS,
                   line_shape="spline", labels=LABELS)
@@ -56,8 +61,10 @@ def lines(frame: pd.DataFrame, x: str, y: str, color: str | None = None, title: 
     return _finish(fig, 380, title)
 
 
+# A bar chart, upright or sideways, used on most pages.
 def bars(frame: pd.DataFrame, x: str, y: str, color: str | None = None, horizontal: bool = False,
          title: str = "", colors: dict | None = None, text: str | None = None) -> go.Figure:
+    # sideways bars swap the two axes
     kwargs = dict(x=y, y=x, orientation="h") if horizontal else dict(x=x, y=y)
     fig = px.bar(frame, **kwargs, color=color, text=text, labels=LABELS,
                  color_discrete_map=colors or theme.DEPARTMENT_COLORS,

@@ -4,13 +4,16 @@ import streamlit as st
 from src.dal import AnalyticsFilter, AnalyticsManager
 from src.ui.common import attempt, job_level_filter, page_header
 
+# pixels per table row, to size the tables
 ROW_HEIGHT = 35
 
 page_header("Top performers")
 am = AnalyticsManager()
+# the review cycles that have reviews
 cycles = am.filter_options()["fiscal_years"]
 
 c1, c2, c3, c4 = st.columns([3, 1, 1, 1])
+# the filters: cycles (the last three by default), job level, ranks per department, minimum reviews
 chosen = c1.multiselect("Review cycles", cycles, default=cycles[-3:])
 levels = job_level_filter(c2)
 top_n = c3.number_input("Ranks per department", 1, 20, 5)
@@ -18,9 +21,11 @@ most_reviews = len(chosen) or len(cycles) or 1             # one review per empl
 min_reviews = c4.number_input("Minimum reviews", 1, most_reviews, min(2, most_reviews))
 
 filters = AnalyticsFilter(job_levels=levels, fiscal_years=tuple(chosen))
+# the ranked employees (DENSE_RANK in the SQL)
 top = attempt(lambda: am.top_performers(filters, top_n=top_n, min_reviews=min_reviews, active_only=True))
 if top is not None and len(top):
     departments = sorted(top.department_name.unique())
+    # one tab per department, with its ranked table
     for tab, department in zip(st.tabs(departments), departments):
         rows = top[top.department_name == department]
         tab.dataframe(rows[["department_rank", "employee_code", "full_name", "current_role", "job_level", "reviews",

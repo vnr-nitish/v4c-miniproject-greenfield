@@ -15,25 +15,33 @@ from src.models.project import CLOSED_STATUSES
 
 logger = logging.getLogger(__name__)
 
+# The SELECT that reads projects; get() and get_by_code() add a WHERE to it.
 _PROJECT_SQL = ("SELECT project_id, project_code, project_name, description, department_id, project_manager_id, "
                 "start_date, planned_end_date, actual_end_date, budget, status, priority FROM hr_oltp.projects ")
 _NUMBER_OR_CODE = re.compile(r"(PRJ)?\d+")
 
 
+# OOP (Inheritance): like every manager it inherits the shared pool and transactions. Full CRUD for
+# projects and assignments in hr_oltp; they reach the warehouse (dim_project) at the next ETL run.
 class ProjectManager(DatabaseConnection):
     """Data-access manager for projects and project assignments."""
 
     # ------------------------------------------------------------------ projects
 
+    # CREATE: inserts into hr_oltp.projects; the INSERT itself works out the next code (PRJ + 5 digits).
     def create(self, project: Project) -> Project:
         """Create a project; the next project code (PRJ + 5 digits) is assigned by the database
         (retried with the code after it if a simultaneous insert took it first)."""
+        # a new project can't have an id yet
         if project.project_id is not None:
             raise ValidationError("A new project has no project id yet")
 
+        # The work as a small function, so run_with_retry() can repeat it.
         def insert() -> tuple[int, str]:
             with self.transaction() as cur:
+                # the project manager must still work here
                 self._require_active_employee(cur, project.project_manager_id, "The project manager")
+                # INSERT ... SELECT: the next code is MAX(code) + 1, worked out in the same statement
                 cur.execute(
                     "INSERT INTO hr_oltp.projects (project_code, project_name, description, department_id, "
                     "       project_manager_id, start_date, planned_end_date, actual_end_date, budget, status, "
@@ -45,15 +53,19 @@ class ProjectManager(DatabaseConnection):
                     (project.project_name, project.description, project.department_id, project.project_manager_id,
                      project.start_date, project.planned_end_date, project.actual_end_date, project.budget,
                      project.status, project.priority))
+                # the id MySQL gave the new row
                 project_id = cur.lastrowid
+                # read back the new code
                 cur.execute("SELECT project_code FROM hr_oltp.projects WHERE project_id = %s", (project_id,))
                 (code,) = cur.fetchone()
             return project_id, code
 
+        # run it; if another user took the same code at the same moment, retry with the next one
         project_id, code = self.run_with_retry(insert, unique_key="uq_projects_code")
         logger.info("Created project %s (id %s)", code, project_id)
         return project.with_changes(project_id=project_id, project_code=code)
 
+    # READ one project as a Project object.
     def get(self, project_id: int) -> Project:
         row = self.fetch_one(_PROJECT_SQL + "WHERE project_id = %s", (project_id,))
         if row is None:
@@ -74,6 +86,7 @@ class ProjectManager(DatabaseConnection):
                limit: int = 500) -> pd.DataFrame:
         """Projects by code or part of the name, status and department — with department and
         manager names, newest first."""
+        # one SELECT with optional filters: a NULL parameter means 'no filter'
         return self.fetch_frame(
             "SELECT p.project_id, p.project_code, p.project_name, d.department_name, "
             "       CONCAT(m.first_name, ' ', m.last_name) AS project_manager, p.status, p.priority, "
@@ -87,17 +100,20 @@ class ProjectManager(DatabaseConnection):
             "ORDER BY p.start_date DESC, p.project_id DESC LIMIT %(limit)s",
             {"status": status, "department": department_id, "text": (text or "").strip(), "limit": limit})
 
+    # UPDATE: saves a project; closing it also ends its open assignments.
     def update(self, project: Project) -> Project:
         """Save changed project details. Closing a project (Completed / Cancelled) also ends the
         open assignments on the actual end date."""
         if project.project_id is None:
             raise ValidationError("The project id is required to update a project")
         with self.transaction() as cur:
+            # FOR UPDATE locks the row until the transaction ends, so two people can't save it at once
             cur.execute("SELECT project_manager_id FROM hr_oltp.projects WHERE project_id = %s FOR UPDATE",
                         (project.project_id,))
             row = cur.fetchone()
             if row is None:
                 raise NotFoundError(f"Project {project.project_id} not found")
+            # a new project manager must still work here
             if project.project_manager_id != row[0]:
                 self._require_active_employee(cur, project.project_manager_id, "The project manager")
             cur.execute(
@@ -107,6 +123,7 @@ class ProjectManager(DatabaseConnection):
                 (project.project_name, project.description, project.department_id, project.project_manager_id,
                  project.start_date, project.planned_end_date, project.actual_end_date, project.budget,
                  project.status, project.priority, project.project_id))
+            # closing the project: end every open assignment on its end date
             if project.is_closed:
                 cur.execute(
                     "UPDATE hr_oltp.project_assignments SET end_date = GREATEST(start_date, %s) "
@@ -115,16 +132,20 @@ class ProjectManager(DatabaseConnection):
                 logger.info("Project %s closed; %s assignments ended", project.project_id, cur.rowcount)
         return self.get(project.project_id)
 
+    # DELETE: only a Planned project nobody worked on; real history is never deleted.
     def delete(self, project_id: int) -> None:
         """Delete a project created by mistake: only while it is Planned and nobody is assigned or
         reviewed on it (otherwise cancel it — history is never deleted)."""
         with self.transaction() as cur:
+            # lock the row and read its status
             cur.execute("SELECT status FROM hr_oltp.projects WHERE project_id = %s FOR UPDATE", (project_id,))
             row = cur.fetchone()
             if row is None:
                 raise NotFoundError(f"Project {project_id} not found")
+            # only a project that never started may be deleted
             if row[0] != "Planned":
                 raise BusinessRuleError(f"Only planned projects can be deleted; this one is {row[0]} — cancel it instead")
+            # delete it from OLTP
             cur.execute("DELETE FROM hr_oltp.projects WHERE project_id = %s", (project_id,))
             # It may already be in the warehouse; without reviews no fact row can point to it.
             # Like every warehouse change it is a logged batch (the analytics cache depends on it).
@@ -139,6 +160,7 @@ class ProjectManager(DatabaseConnection):
 
     # ------------------------------------------------------------------ assignments
 
+    # CREATE an assignment: checks the employee is employed and not booked for more than 100 % of their time.
     def assign(self, assignment: Assignment, allow_over_allocation: bool = False) -> Assignment:
         """Allocate an employee to an open project.
 
@@ -150,23 +172,29 @@ class ProjectManager(DatabaseConnection):
         if assignment.assignment_id is not None:
             raise ValidationError("A new assignment has no assignment id yet")
         with self.transaction() as cur:
+            # read the project: is it still open, and when did it start?
             cur.execute("SELECT status, start_date FROM hr_oltp.projects WHERE project_id = %s",
                         (assignment.project_id,))
             project = cur.fetchone()
             if project is None:
                 raise NotFoundError(f"Project {assignment.project_id} not found")
             status, project_start = project
+            # closed projects take nobody new
             if status in CLOSED_STATUSES:
                 raise BusinessRuleError(f"The project is {status}; people can no longer be assigned to it")
             if assignment.start_date < project_start:
                 raise BusinessRuleError(f"The assignment cannot start before the project ({project_start})")
+            # the employee must work here on the start date
             self._require_active_employee(cur, assignment.employee_id, "The employee", on=assignment.start_date)
+            # how much of their time is already booked on that day
             current = self._allocation_on(cur, assignment.employee_id, assignment.start_date)
+            # over 100 % in total: refuse, unless 'assign anyway' was ticked
             if current + assignment.allocation_pct > 100 and not allow_over_allocation:
                 raise OverAllocationError(
                     f"The employee is already allocated {current} % on {assignment.start_date}; "
                     f"adding {assignment.allocation_pct} % makes {current + assignment.allocation_pct} %",
                     current, assignment.allocation_pct)
+            # INSERT the assignment
             cur.execute(
                 "INSERT INTO hr_oltp.project_assignments (employee_id, project_id, project_role, allocation_pct, "
                 "start_date, end_date) VALUES (%s, %s, %s, %s, %s, %s)",
@@ -208,6 +236,7 @@ class ProjectManager(DatabaseConnection):
 
     # ------------------------------------------------------------------ helpers
 
+    # Adds up the allocation % of the employee's assignments that run on that day.
     @staticmethod
     def _allocation_on(cur: Any, employee_id: int, day: date) -> int:
         cur.execute("SELECT COALESCE(SUM(allocation_pct), 0) FROM hr_oltp.project_assignments "
@@ -230,6 +259,7 @@ class ProjectManager(DatabaseConnection):
         if on is not None and on < hire_date:
             raise BusinessRuleError(f"{who} only joined on {hire_date}")
 
+    # Runs one UPDATE or DELETE on an assignment; no row changed = not found.
     def _change_assignment(self, sql: str, params: tuple, assignment_id: int) -> None:
         with self.transaction() as cur:
             cur.execute(sql, params)

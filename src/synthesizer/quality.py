@@ -12,18 +12,23 @@ from src.synthesizer.config import SynthesizerConfig
 from src.synthesizer.reference import DEPARTMENT_ALIASES
 
 
+# Plants small, counted mistakes in the staging data (duplicates, wrong gender codes, messy labels), so
+# the ETL can show that it cleans them. The counts are compared with the ETL log.
 class AnomalyInjector:
 
+    # Keeps the settings and the shared random generator.
     def __init__(self, config: SynthesizerConfig, rng: np.random.Generator) -> None:
         self._config = config
         self._rng = rng
 
+    # Plants the problems and returns how many of each were planted (the manifest).
     def apply(self, frames: dict[str, pd.DataFrame]) -> dict:
         cfg = self._config
         manifest = {}
         emp = frames["stg_employees"]
         hist = frames["stg_job_history"]
 
+        # about 1 % of genders become 'M'/'F'; 2 % of labels get the wrong case, extra spaces or an alias like 'R&D'
         manifest["gender_codes"] = self._gender_codes(emp, cfg.gender_code_rate)
         manifest["label_noise_employees"] = self._label_noise(emp, cfg.label_noise_rate)
         manifest["label_noise_job_history"] = self._label_noise(hist, cfg.label_noise_rate)
@@ -34,6 +39,7 @@ class AnomalyInjector:
         manifest["duplicate_employee_rows"] = int(len(dup_emp))
 
         reviews = frames["stg_reviews"]
+        # 0.3 % of reviews are submitted twice with a slightly different KPI; the ETL keeps the latest
         dup_rev = np.sort(self._rng.choice(len(reviews), size=int(round(len(reviews) * cfg.duplicate_review_rate)),
                                            replace=False))
         resubmitted = reviews.iloc[dup_rev].copy()
@@ -43,6 +49,7 @@ class AnomalyInjector:
         manifest["duplicate_review_rows"] = int(len(dup_rev))
         return manifest
 
+    # Shortens some genders to one letter; returns how many.
     def _gender_codes(self, emp: pd.DataFrame, rate: float) -> int:
         rows = self._rng.random(len(emp)) < rate
         emp.loc[rows, "gender"] = emp.loc[rows, "gender"].str[0]          # 'Male' -> 'M', 'Female' -> 'F'

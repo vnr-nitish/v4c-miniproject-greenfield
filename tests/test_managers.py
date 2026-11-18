@@ -6,6 +6,8 @@ connection whose work is rolled back at the end, so the real data is used and ne
 session, so they also exercise the cache.
 They need a completed ETL run:  python scripts/run_etl.py --migrate
 """
+# How to read this file: each 'test_' function is one check that pytest runs; 'assert X' means X must be true.
+# A parameter such as 'cur' is a fixture, prepared first by a function marked @pytest.fixture.
 import threading
 import time
 from dataclasses import replace
@@ -40,6 +42,7 @@ def value(sql, params=None):
     return next(iter(one(sql, params).values()))
 
 
+# Fixture 'database': prepared by pytest and handed to every test with a parameter of this name.
 @pytest.fixture(scope="module", autouse=True)
 def database():
     try:
@@ -51,6 +54,7 @@ def database():
         pytest.skip("ETL has not been run: python scripts/run_etl.py --migrate")
 
 
+# Fixture 'session': prepared by pytest and handed to every test with a parameter of this name.
 @pytest.fixture
 def session():
     """Everything the test does through the managers is rolled back afterwards."""
@@ -58,6 +62,7 @@ def session():
         yield
 
 
+# Fixture 'picks': prepared by pytest and handed to every test with a parameter of this name.
 @pytest.fixture(scope="module")
 def picks():
     """Reference values and existing people the tests build on (read once)."""
@@ -117,6 +122,7 @@ def assignment(employee, project, pct=60, start=None, role="Developer") -> Assig
 
 # ----------------------------------------------------------------------------- architecture
 
+# Test: every manager is a singleton on one shared pool.
 def test_every_manager_is_a_singleton_on_one_shared_pool():
     for manager in MANAGERS:
         assert issubclass(manager, DatabaseConnection)
@@ -125,6 +131,7 @@ def test_every_manager_is_a_singleton_on_one_shared_pool():
     assert len({id(manager()._pool) for manager in MANAGERS}) == 1
 
 
+# Test: rollback session leaves no trace.
 def test_rollback_session_leaves_no_trace(picks):
     before = value("SELECT COUNT(*) AS n FROM hr_oltp.employees")
     with DatabaseConnection.rollback_session():
@@ -134,6 +141,7 @@ def test_rollback_session_leaves_no_trace(picks):
     assert one("SELECT 1 AS found FROM hr_oltp.employees WHERE email = %s", (hired.email,)) is None
 
 
+# Test: a failed step undoes only itself.
 def test_a_failed_step_undoes_only_itself(session, picks):
     hired = hire(picks)
     with pytest.raises(BusinessRuleError):
@@ -160,6 +168,7 @@ def test_a_busy_pool_waits_for_a_free_connection(monkeypatch):
             conn.close()
 
 
+# Test: a pool busy for too long gives a clear error.
 def test_a_pool_busy_for_too_long_gives_a_clear_error(monkeypatch):
     monkeypatch.setattr(DatabaseConnection, "_pool_wait", 0.3)
     held = hold_every_connection()
@@ -204,6 +213,7 @@ def test_a_network_hiccup_while_connecting_is_tried_again(monkeypatch):
     assert len(calls) == 3
 
 
+# Test: a wrong password is not tried again.
 def test_a_wrong_password_is_not_tried_again(monkeypatch):
     calls = pool_that_fails(monkeypatch, [mysql.connector.Error(errno=1045)])
     with pytest.raises(DatabaseError):
@@ -211,6 +221,7 @@ def test_a_wrong_password_is_not_tried_again(monkeypatch):
     assert len(calls) == 1
 
 
+# Test: a network problem that stays is reported.
 def test_a_network_problem_that_stays_is_reported(monkeypatch):
     calls = pool_that_fails(monkeypatch, [mysql.connector.Error(errno=2003) for _ in range(10)])
     with pytest.raises(DatabaseError):
@@ -218,6 +229,7 @@ def test_a_network_problem_that_stays_is_reported(monkeypatch):
     assert len(calls) == 4
 
 
+# Test: a write leaves no session state behind.
 def test_a_write_leaves_no_session_state_behind():
     with DatabaseConnection().transaction() as cur:
         cur.execute("SET @left_behind = 1")
@@ -259,6 +271,7 @@ def count_borrows(monkeypatch) -> list:
     return borrows
 
 
+# Test: a read session shares one connection.
 def test_a_read_session_shares_one_connection(monkeypatch):
     borrows = count_borrows(monkeypatch)
     with DatabaseConnection.read_session():
@@ -270,6 +283,7 @@ def test_a_read_session_shares_one_connection(monkeypatch):
     assert len(borrows) == 1
 
 
+# Test: a form reads all its lists on one connection.
 def test_a_form_reads_all_its_lists_on_one_connection(monkeypatch):
     ref = ReferenceDataManager()
     ref.refresh()
@@ -281,6 +295,7 @@ def test_a_form_reads_all_its_lists_on_one_connection(monkeypatch):
     assert len(borrows) == 1
 
 
+# Test: a write inside a read session gets its own connection.
 def test_a_write_inside_a_read_session_gets_its_own_connection(monkeypatch):
     borrows = count_borrows(monkeypatch)
     with DatabaseConnection.read_session():
@@ -333,6 +348,7 @@ def test_a_code_taken_by_a_simultaneous_hire_is_retried(session, picks, monkeypa
     assert len(EmployeeManager().history(hired.employee_id)) == 1        # the failed attempt left nothing
 
 
+# Test: retrying gives up and other duplicates are not retried.
 def test_retrying_gives_up_and_other_duplicates_are_not_retried(session, picks, monkeypatch):
     calls = onboard_calls(monkeypatch, fail_times=99)
     with pytest.raises(DuplicateError, match="employee code already exists"):
@@ -347,6 +363,7 @@ def test_retrying_gives_up_and_other_duplicates_are_not_retried(session, picks, 
 
 # ----------------------------------------------------------------------------- reference data
 
+# Test: reference lists.
 def test_reference_lists(picks):
     ref = ReferenceDataManager()
     assert ref.departments().department_name.tolist() == ["Human Resources", "Research & Development", "Sales"]
@@ -362,6 +379,7 @@ def test_reference_lists(picks):
         ref.levels_for(250)
 
 
+# Test: reference lists are cached copies.
 def test_reference_lists_are_cached_copies():
     ref = ReferenceDataManager()
     first = ref.departments()
@@ -371,6 +389,7 @@ def test_reference_lists_are_cached_copies():
 
 # ----------------------------------------------------------------------------- EmployeeManager
 
+# Test: onboarding creates the employee and the first warehouse version.
 def test_onboarding_creates_the_employee_and_the_first_warehouse_version(session, picks):
     last_code = value("SELECT MAX(employee_code) AS code FROM hr_oltp.employees")
     hired = hire(picks)
@@ -387,6 +406,7 @@ def test_onboarding_creates_the_employee_and_the_first_warehouse_version(session
     assert hired.employee_id in EmployeeManager().search("Asha Verma", department_id=RND, limit=1000).employee_id.tolist()
 
 
+# Test: search finds anyone by name email phone or id.
 def test_search_finds_anyone_by_name_email_phone_or_id(session, picks):
     email = f"{uuid4().hex[:12]}_x@example.com"
     hired = hire(picks, first_name="Zzyzx", last_name="Quorra", email=email, phone="+91 (99887) 76-655")
@@ -404,6 +424,7 @@ def test_search_finds_anyone_by_name_email_phone_or_id(session, picks):
     assert search("no such person").empty
 
 
+# Test: a project is found by its code or number.
 def test_a_project_is_found_by_its_code_or_number():
     code = value("SELECT project_code AS code FROM hr_oltp.projects LIMIT 1")
     number = int(code[3:])
@@ -413,12 +434,14 @@ def test_a_project_is_found_by_its_code_or_number():
         ProjectManager().get_by_code("PRJ99999")
 
 
+# Test: search leaves out leavers unless asked.
 def test_search_leaves_out_leavers_unless_asked(picks):
     code = value("SELECT employee_code AS code FROM hr_oltp.employees WHERE exit_date IS NOT NULL LIMIT 1")
     assert EmployeeManager().search(code).empty
     assert EmployeeManager().search(code, active_only=False).employee_code.tolist() == [code]
 
 
+# Test: invalid onboarding is refused and leaves nothing.
 @pytest.mark.parametrize("position_changes, employee_changes, error, message", [
     (dict(department_id=SALES), {}, BusinessRuleError, "does not exist in the selected department"),
     (dict(job_level_id=5), {}, BusinessRuleError, "outside the allowed range"),
@@ -438,6 +461,7 @@ def test_invalid_onboarding_is_refused_and_leaves_nothing(session, picks, positi
     assert value("SELECT COUNT(*) AS n FROM hr_oltp.employees") == before
 
 
+# Test: onboarding needs a new person.
 def test_onboarding_needs_a_new_person(session, picks):
     with pytest.raises(ValidationError):
         EmployeeManager().onboard(new_employee(picks, employee_id=5), lab_position(picks))
@@ -460,6 +484,7 @@ def test_department_change_is_an_scd2_update(session, picks):
         "SELECT message FROM hr_dw.etl_batch_log WHERE batch_id = %s AND log_id <> batch_id", (change.batch_id,))["message"]
 
 
+# Test: promotion reason is derived.
 def test_promotion_reason_is_derived(session, picks):
     hired = hire(picks)
     promoted = lab_position(picks, job_level_id=2, monthly_income=picks.level1_income * 2)
@@ -481,6 +506,7 @@ def test_personal_corrections_overwrite_every_version(session, picks):
     assert [tuple(r.values()) for r in rows] == [("Married", "Asha Verma-Rao")] * 2
 
 
+# Test: exit closes assignments and updates the warehouse.
 def test_exit_closes_assignments_and_updates_the_warehouse(session, picks):
     hired = hire(picks)
     project = new_project(picks)
@@ -497,6 +523,7 @@ def test_exit_closes_assignments_and_updates_the_warehouse(session, picks):
         EmployeeManager().record_exit(hired.employee_id, picks.today, picks.exit_reason_id)
 
 
+# Test: exit cannot predate the last review.
 def test_exit_cannot_predate_the_last_review(session):
     row = one("SELECT e.employee_id, MAX(r.review_date) AS last_review FROM hr_oltp.vw_employee_current e "
               "JOIN hr_oltp.performance_reviews r ON r.employee_id = e.employee_id "
@@ -506,6 +533,7 @@ def test_exit_cannot_predate_the_last_review(session):
         EmployeeManager().record_exit(row["employee_id"], row["last_review"] - timedelta(days=1), 1)
 
 
+# Test: unknown employees are not found.
 def test_unknown_employees_are_not_found():
     for call in (lambda: EmployeeManager().get(99_999_999), lambda: EmployeeManager().get_by_code("EMP999999"),
                  lambda: EmployeeManager().current_position(99_999_999), lambda: EmployeeManager().profile(99_999_999)):
@@ -515,6 +543,7 @@ def test_unknown_employees_are_not_found():
 
 # ----------------------------------------------------------------------------- ProjectManager
 
+# Test: project create read update.
 def test_project_create_read_update(session, picks):
     last_code = value("SELECT MAX(project_code) AS code FROM hr_oltp.projects")
     project = new_project(picks)
@@ -525,6 +554,7 @@ def test_project_create_read_update(session, picks):
     assert (renamed.project_name, renamed.priority) == ("Renamed Platform", "Critical")
 
 
+# Test: over allocation is refused unless confirmed.
 def test_over_allocation_is_refused_unless_confirmed(session, picks):
     hired = hire(picks)
     first, second = new_project(picks), new_project(picks, project_name="Second Project")
@@ -537,6 +567,7 @@ def test_over_allocation_is_refused_unless_confirmed(session, picks):
     assert len(ProjectManager().assignments_for(hired.employee_id)) == 2
 
 
+# Test: invalid assignments are refused.
 @pytest.mark.parametrize("case, message", [
     ("closed project", "can no longer be assigned"),
     ("before the project", "cannot start before the project"),
@@ -556,6 +587,7 @@ def test_invalid_assignments_are_refused(session, picks, case, message):
         ProjectManager().assign(assignment(hired, project, start=start))
 
 
+# Test: closing a project ends its assignments.
 def test_closing_a_project_ends_its_assignments(session, picks):
     hired = hire(picks)
     project = new_project(picks)
@@ -565,6 +597,7 @@ def test_closing_a_project_ends_its_assignments(session, picks):
     assert ProjectManager().team(project.project_id).is_open.tolist() == [0]
 
 
+# Test: assignments can be ended or removed.
 def test_assignments_can_be_ended_or_removed(session, picks):
     hired = hire(picks)
     project = new_project(picks)
@@ -577,6 +610,7 @@ def test_assignments_can_be_ended_or_removed(session, picks):
         ProjectManager().remove_assignment(first.assignment_id)
 
 
+# Test: only unused planned projects can be deleted.
 def test_only_unused_planned_projects_can_be_deleted(session, picks):
     planned = new_project(picks, status="Planned", start_date=picks.today + timedelta(10))
     ProjectManager().delete(planned.project_id)
@@ -590,6 +624,7 @@ def test_only_unused_planned_projects_can_be_deleted(session, picks):
         ProjectManager().delete(staffed.project_id)
 
 
+# Test: deleting a warehoused project is a logged batch.
 def test_deleting_a_warehoused_project_is_a_logged_batch(session):
     project_id = value(
         "SELECT p.project_id FROM hr_oltp.projects p JOIN hr_dw.dim_project dp ON dp.project_id = p.project_id "
@@ -609,6 +644,7 @@ def test_deleting_a_warehoused_project_is_a_logged_batch(session):
 
 # ----------------------------------------------------------------------------- ReviewManager
 
+# Test: review submit read and withdraw.
 def test_review_submit_read_and_withdraw(session, picks):
     hired = hire(picks)
     year = picks.today.year - 1
@@ -625,6 +661,7 @@ def test_review_submit_read_and_withdraw(session, picks):
     assert ReviewManager().reviews_for(hired.employee_id).empty
 
 
+# Test: invalid reviews are refused.
 @pytest.mark.parametrize("case, message", [
     ("future date", "cannot be in the future"),
     ("reviewer not employed yet", "The reviewer was not employed"),
@@ -649,12 +686,14 @@ def test_invalid_reviews_are_refused(session, picks, case, message):
         ReviewManager().submit(review)
 
 
+# Test: reviews already in the warehouse are final.
 def test_reviews_already_in_the_warehouse_are_final(session):
     review_id = value("SELECT MIN(review_id) AS r FROM hr_dw.fact_performance_reviews")
     with pytest.raises(BusinessRuleError, match="already in the warehouse"):
         ReviewManager().withdraw(review_id)
 
 
+# Test: review form suggestions.
 def test_review_form_suggestions(session, picks):
     hired = hire(picks)
     year = picks.today.year - 1
@@ -666,22 +705,26 @@ def test_review_form_suggestions(session, picks):
 
 # ----------------------------------------------------------------------------- AnalyticsManager
 
+# Fixture 'analytics': prepared by pytest and handed to every test with a parameter of this name.
 @pytest.fixture(scope="module")
 def analytics():
     return AnalyticsManager()
 
 
+# Fixture 'facts': prepared by pytest and handed to every test with a parameter of this name.
 @pytest.fixture(scope="module")
 def facts():
     return value("SELECT COUNT(*) AS n FROM hr_dw.fact_performance_reviews")
 
 
+# Test: filter options.
 def test_filter_options(analytics):
     options = analytics.filter_options()
     assert options["departments"] == ["Human Resources", "Research & Development", "Sales"]
     assert options["fiscal_years"][0] == "FY2019-20" and len(options["fiscal_years"]) == 7
 
 
+# Test: yoy trends compare each cycle with the previous.
 def test_yoy_trends_compare_each_cycle_with_the_previous(analytics, facts):
     trend = analytics.yoy_trends()
     assert trend.reviews.sum() == facts and trend.period.is_monotonic_increasing
@@ -692,6 +735,7 @@ def test_yoy_trends_compare_each_cycle_with_the_previous(analytics, facts):
     assert by_department.reviews.sum() == facts
 
 
+# Test: yoy trends respect the filters.
 def test_yoy_trends_respect_the_filters(analytics):
     trend = analytics.yoy_trends(AnalyticsFilter(departments=("Sales",), job_levels=(1, 2),
                                                  fiscal_years=("FY2024-25", "FY2025-26")))
@@ -706,6 +750,7 @@ def test_yoy_trends_respect_the_filters(analytics):
         analytics.yoy_trends(period="weekly")
 
 
+# Test: top performers are dense ranked per department.
 def test_top_performers_are_dense_ranked_per_department(analytics):
     cycle = AnalyticsFilter(fiscal_years=("FY2023-24", "FY2024-25", "FY2025-26"))
     top = analytics.top_performers(cycle, top_n=5, min_reviews=2)
@@ -723,6 +768,7 @@ def test_top_performers_are_dense_ranked_per_department(analytics):
         analytics.top_performers(top_n=0)
 
 
+# Test: top performer matches a direct query.
 def test_top_performer_matches_a_direct_query(analytics):
     top = analytics.top_performers(AnalyticsFilter(departments=("Human Resources",), fiscal_years=("FY2024-25",)),
                                    top_n=1, active_only=False)
@@ -734,6 +780,7 @@ def test_top_performer_matches_a_direct_query(analytics):
     assert len(top) == top.sharing_rank.iloc[0]
 
 
+# Test: scored workforce matches its factors.
 def test_scored_workforce_matches_its_factors(analytics):
     scored = analytics.scored_workforce()
     assert len(scored) == value("SELECT COUNT(*) AS n FROM hr_dw.dim_employee WHERE is_current AND exit_date IS NULL")
@@ -746,6 +793,7 @@ def test_scored_workforce_matches_its_factors(analytics):
     assert (by_score["min"] == by_score["max"]).all() and by_score["min"].is_monotonic_increasing
 
 
+# Test: attrition risk views.
 def test_attrition_risk_views(analytics):
     rnd_level1 = AnalyticsFilter(departments=("Research & Development",), job_levels=(1,))
     risky = analytics.attrition_risk(rnd_level1, limit=50, min_band="High")
@@ -770,6 +818,7 @@ def test_risk_score_separates_past_leavers(analytics):
     assert backtest.share_of_leavers_pct.sum() == pytest.approx(100, abs=0.3)
 
 
+# Test: attrition trend uses point in time departments.
 def test_attrition_trend_uses_point_in_time_departments(analytics):
     trend = analytics.attrition_trend()
     exits = DatabaseConnection().fetch_frame(
@@ -785,6 +834,7 @@ def test_attrition_trend_uses_point_in_time_departments(analytics):
     assert (totals.headcount_start.values == trend.headcount_start.values).all()
 
 
+# Test: overview.
 def test_overview(analytics):
     overview = analytics.overview()
     trend = analytics.attrition_trend()
@@ -794,6 +844,7 @@ def test_overview(analytics):
     assert overview["open_projects"] >= overview["overdue_projects"] > 0
 
 
+# Test: project bottlenecks.
 def test_project_bottlenecks(analytics):
     completed = value("SELECT COUNT(*) AS n FROM hr_dw.dim_project WHERE status = 'Completed'")
     for by in ("priority", "budget_band", "department", "year"):
@@ -806,6 +857,7 @@ def test_project_bottlenecks(analytics):
         analytics.project_delivery(by="colour")
 
 
+# Test: cached results are copies.
 def test_cached_results_are_copies(analytics):
     first = analytics.yoy_trends()
     first.loc[0, "reviews"] = -1
@@ -834,6 +886,7 @@ def test_one_visitor_computes_a_slow_result_and_the_others_wait(analytics):
     assert not analytics._computing
 
 
+# Test: a failed computation is not remembered.
 def test_a_failed_computation_is_not_remembered(analytics):
     key = ("flaky", uuid4().hex)
 
@@ -845,6 +898,7 @@ def test_a_failed_computation_is_not_remembered(analytics):
     assert analytics._cached(key, lambda: 42) == 42
 
 
+# Fixture 'saved_state': prepared by pytest and handed to every test with a parameter of this name.
 @pytest.fixture
 def saved_state(analytics):
     """The tests below change what the manager restored; put it back."""
@@ -862,12 +916,14 @@ def saved_earlier(analytics, key, days=0, batches=0) -> pd.DataFrame:
     return frame
 
 
+# Test: saved results come back unchanged.
 def test_saved_results_come_back_unchanged(analytics):
     for frame in (analytics.scored_workforce(), analytics.yoy_trends(), analytics.risk_backtest(),
                   analytics.attrition_trend(), analytics.bottleneck_projects(limit=500)):
         pd.testing.assert_frame_equal(_from_bytes(_to_bytes(frame)), frame)
 
 
+# Test: results saved today are used without a query.
 def test_results_saved_today_are_used_without_a_query(analytics, saved_state):
     key = ("saved today", uuid4().hex)
     frame = saved_earlier(analytics, key)
@@ -875,6 +931,7 @@ def test_results_saved_today_are_used_without_a_query(analytics, saved_state):
     assert (analytics.data_version(),) + key in analytics._cache
 
 
+# Test: results of an earlier day serve visitors until the warm up replaces them.
 def test_results_of_an_earlier_day_serve_visitors_until_the_warm_up_replaces_them(analytics, saved_state):
     key = ("saved yesterday", uuid4().hex)
     frame = saved_earlier(analytics, key, days=1)
@@ -891,12 +948,14 @@ def test_results_of_an_earlier_day_serve_visitors_until_the_warm_up_replaces_the
     pd.testing.assert_frame_equal(analytics._cached(key, must_not_run), fresh)        # visitors now get that
 
 
+# Test: results of another batch are never used.
 def test_results_of_another_batch_are_never_used(analytics, saved_state):
     key = ("old batch", uuid4().hex)
     saved_earlier(analytics, key, batches=1)
     assert analytics._cached(key, lambda: 42) == 42
 
 
+# Test: warm up saves the default views and a restart brings them back.
 def test_warm_up_saves_the_default_views_and_a_restart_brings_them_back(analytics, saved_state, monkeypatch):
     version = analytics.data_version()
     analytics._warm_version = ()
@@ -924,12 +983,14 @@ def test_warm_up_saves_the_default_views_and_a_restart_brings_them_back(analytic
         DatabaseConnection().execute("DELETE FROM hr_dw.analytics_snapshot")
 
 
+# Test: warm up does nothing while the version is unchanged.
 def test_warm_up_does_nothing_while_the_version_is_unchanged(analytics, saved_state, monkeypatch):
     analytics._warm_version = analytics.data_version()
     monkeypatch.setattr(analytics, "filter_options", must_not_run)
     analytics.warm_up()
 
 
+# Test: results of older code are ignored.
 def test_results_of_older_code_are_ignored(analytics, saved_state, monkeypatch):
     version = analytics.data_version()
     analytics._save_results(version, {repr(("x",)): pd.DataFrame({"n": [1]})})
@@ -942,6 +1003,7 @@ def test_results_of_older_code_are_ignored(analytics, saved_state, monkeypatch):
         DatabaseConnection().execute("DELETE FROM hr_dw.analytics_snapshot")
 
 
+# Test: a missing results table only costs speed.
 def test_a_missing_results_table_only_costs_speed(analytics, saved_state, monkeypatch):
     analytics._saved, analytics._saved_version, analytics._warm_version = {}, (), ()
 
@@ -955,6 +1017,7 @@ def test_a_missing_results_table_only_costs_speed(analytics, saved_state, monkey
     analytics._save_results(analytics.data_version(), {})         # logged, not raised
 
 
+# Test: cache is bypassed in a rollback session.
 def test_cache_is_bypassed_in_a_rollback_session(picks, analytics):
     analytics.yoy_trends()
     cached = len(analytics._cache)

@@ -6,6 +6,7 @@ from src.models.project import PRIORITIES
 from src.ui import charts
 from src.ui.common import attempt, department_filter, note, page_header
 
+# how completed projects can be grouped, and the display order
 GROUPS = {"priority": "Priority", "budget_band": "Budget band", "department": "Department", "year": "Year"}
 ORDER = {"priority": list(PRIORITIES), "budget_band": ["<250K", "250K-1M", "1M-3M", "3M+"]}
 
@@ -13,12 +14,15 @@ page_header("Project bottlenecks")
 am = AnalyticsManager()
 filter_column, _ = st.columns([1, 3])
 filters = AnalyticsFilter(department_filter(filter_column))
+# two tabs: overdue projects, completed projects
 tab_overdue, tab_completed = st.tabs(["Overdue projects", "Completed projects"])
 
 with tab_overdue:
+    # open projects past their planned end (ranked with RANK in the SQL)
     overdue = attempt(lambda: am.bottleneck_projects(filters, limit=500))
     if overdue is not None and len(overdue):
         st.subheader(f"{len(overdue)} overdue projects")
+        # bubble chart: days overdue against team overtime
         st.plotly_chart(charts.bubbles(overdue), width="stretch")
         note("Projects in the top right need attention first: they are long overdue and their teams work a lot of "
              "overtime. A bigger bubble means a bigger budget.")
@@ -36,6 +40,7 @@ with tab_overdue:
 
 with tab_completed:
     group = st.segmented_control("Group by", list(GROUPS), format_func=GROUPS.get, default="priority", required=True)
+    # completed projects: how many were late, and by how much
     delivery = attempt(lambda: am.project_delivery(filters, by=group))
     if delivery is not None and len(delivery):
         if group in ORDER:

@@ -1,5 +1,7 @@
 """Unit tests without a database: the entity classes, the analytics filter and the translation
 of MySQL errors into application exceptions (docs/backend_design.md)."""
+# How to read this file: each 'test_' function is one check that pytest runs; 'assert X' means X must be true.
+# A parameter such as 'cur' is a fixture, prepared first by a function marked @pytest.fixture.
 from dataclasses import FrozenInstanceError
 from datetime import date
 from decimal import Decimal
@@ -52,12 +54,14 @@ def errors_of(factory, **changes) -> dict:
 
 # ----------------------------------------------------------------------------- Entity behaviour
 
+# Test: entities are immutable.
 def test_entities_are_immutable():
     e = employee()
     with pytest.raises(FrozenInstanceError):
         e.email = "other@example.com"
 
 
+# Test: changes create a new validated object.
 def test_changes_create_a_new_validated_object():
     e = employee()
     moved = e.with_changes(distance_from_home_km=20)
@@ -66,6 +70,7 @@ def test_changes_create_a_new_validated_object():
         e.with_changes(distance_from_home_km=80)                                     # the copy is validated too
 
 
+# Test: input is normalized.
 def test_input_is_normalized():
     e = employee(first_name="  Asha ", email=" Asha.Verma@Example.COM ")
     assert e.first_name == "Asha" and e.email == "asha.verma@example.com"
@@ -75,23 +80,27 @@ def test_input_is_normalized():
     assert r.overtime_flag is True and r.kpi_score == Decimal("91.25") and r.comments is None
 
 
+# Test: numpy values from dataframes become python values.
 def test_numpy_values_from_dataframes_become_python_values():
     p = position(department_id=np.int64(2), job_level_id=np.int32(1))
     assert type(p.department_id) is int and type(p.job_level_id) is int
 
 
+# Test: every broken rule is reported at once.
 def test_every_broken_rule_is_reported_at_once():
     errors = errors_of(employee, email="not-an-email", phone="12", date_of_birth=date(2010, 1, 1))
     assert {"email", "phone", "hire_date"} <= errors.keys()
     assert errors["hire_date"] == "An employee must be at least 18 on the hire date"
 
 
+# Test: from row ignores extra columns and round trips.
 def test_from_row_ignores_extra_columns_and_round_trips():
     e = employee(employee_id=5, employee_code="EMP000005")
     row = {**e.to_record(), "full_name": "ignored", "is_active": 1}
     assert Employee.from_row(row) == e
 
 
+# Test: validation error message and fields.
 def test_validation_error_message_and_fields():
     err = ValidationError({"email": "Enter a valid e-mail address", "phone": "Too short"})
     assert str(err) == "email: Enter a valid e-mail address; phone: Too short"
@@ -101,6 +110,7 @@ def test_validation_error_message_and_fields():
 
 # ----------------------------------------------------------------------------- Employee
 
+# Test: employee rules.
 @pytest.mark.parametrize("changes, field", [
     (dict(employee_code="E123"), "employee_code"),
     (dict(first_name="Asha2"), "first_name"),
@@ -123,11 +133,13 @@ def test_employee_rules(changes, field):
     assert field in errors_of(employee, **changes)
 
 
+# Test: names with apostrophes and hyphens are valid.
 def test_names_with_apostrophes_and_hyphens_are_valid():
     for last_name in ("D’Alia", "O'Neil", "Sen-Gupta", "de Souza"):
         assert employee(last_name=last_name).last_name == last_name
 
 
+# Test: employee behaviour.
 def test_employee_behaviour():
     e = employee(exit_date=date(2027, 3, 1), exit_reason_id=2)
     assert e.full_name == "Asha Verma" and not e.is_active
@@ -139,6 +151,7 @@ def test_employee_behaviour():
 
 # ----------------------------------------------------------------------------- Position
 
+# Test: position rules.
 @pytest.mark.parametrize("changes, field", [
     (dict(job_level_id=6), "job_level_id"),
     (dict(monthly_income=0), "monthly_income"),
@@ -151,6 +164,7 @@ def test_position_rules(changes, field):
     assert field in errors_of(position, **changes)
 
 
+# Test: position changes.
 def test_position_changes():
     old = position()
     new = old.with_changes(department_id=3, job_level_id=2, monthly_income=Decimal("5200"))
@@ -162,6 +176,7 @@ def test_position_changes():
 
 # ----------------------------------------------------------------------------- Project and Assignment
 
+# Test: project rules.
 @pytest.mark.parametrize("changes, field", [
     (dict(project_code="P1"), "project_code"),
     (dict(project_name=" "), "project_name"),
@@ -177,6 +192,7 @@ def test_project_rules(changes, field):
     assert field in errors_of(project, **changes)
 
 
+# Test: project delay and closing.
 def test_project_delay_and_closing():
     p = project()
     assert p.delay_days is None and p.is_delayed is None and not p.is_closed
@@ -188,6 +204,7 @@ def test_project_delay_and_closing():
     assert p.close("Cancelled", date(2025, 3, 1)).delay_days is None                 # only completed projects
 
 
+# Test: assignment rules and behaviour.
 def test_assignment_rules_and_behaviour():
     a = Assignment(employee_id=1, project_id=2, project_role="Developer", allocation_pct=60,
                    start_date=date(2025, 1, 1))
@@ -201,6 +218,7 @@ def test_assignment_rules_and_behaviour():
 
 # ----------------------------------------------------------------------------- Review
 
+# Test: review rules.
 @pytest.mark.parametrize("changes, field", [
     (dict(reviewer_id=10), "reviewer_id"),                       # self-review
     (dict(review_date=date(2026, 1, 1)), "review_date"),         # outside the review year and the next
@@ -215,6 +233,7 @@ def test_review_rules(changes, field):
     assert field in errors_of(review, **changes)
 
 
+# Test: review behaviour.
 def test_review_behaviour():
     r = review(rating_id=4)
     assert r.rating_label == "Outstanding" and r.is_outstanding and r.is_held_in_following_year
@@ -223,6 +242,7 @@ def test_review_behaviour():
 
 # ----------------------------------------------------------------------------- MySQL errors -> application errors
 
+# Test: mysql errors become application errors.
 @pytest.mark.parametrize("errno, message, expected_type, expected_text", [
     (1644, "This job role does not exist in the selected department", BusinessRuleError,
      "This job role does not exist in the selected department"),
@@ -256,12 +276,14 @@ def test_the_constraint_behind_an_error_is_kept(errno, message, constraint):
     assert translate_error(mysql.connector.Error(msg=message, errno=errno)).constraint == constraint
 
 
+# Test: duplicates are business rule errors.
 def test_duplicates_are_business_rule_errors():
     assert issubclass(DuplicateError, BusinessRuleError)
 
 
 # ----------------------------------------------------------------------------- AnalyticsFilter and the risk score
 
+# Test: filter builds bound conditions.
 def test_filter_builds_bound_conditions():
     f = AnalyticsFilter(departments=["Sales", "Human Resources"], job_levels=[np.int64(1)], fiscal_years=["FY2024-25"])
     sql, params = f.where("dd.department_name", "de.job_level", "d.fiscal_year")
@@ -273,6 +295,7 @@ def test_filter_builds_bound_conditions():
     assert hash(f) == hash(AnalyticsFilter(("Sales", "Human Resources"), (1,), ("FY2024-25",)))   # a cache key
 
 
+# Test: invalid filters are refused.
 @pytest.mark.parametrize("changes, field", [
     (dict(job_levels=(0,)), "job_levels"), (dict(job_levels=("two",)), "job_levels"),
     (dict(fiscal_years=("2024",)), "fiscal_years"), (dict(fiscal_years=("FY2024-25; DROP TABLE x",)), "fiscal_years"),
@@ -281,12 +304,14 @@ def test_invalid_filters_are_refused(changes, field):
     assert field in errors_of(AnalyticsFilter, **changes)
 
 
+# Test: filter selects dataframe rows.
 def test_filter_selects_dataframe_rows():
     frame = pd.DataFrame({"department_name": ["Sales", "Sales", "Human Resources"], "job_level": [1, 2, 1]})
     assert AnalyticsFilter(departments=("Sales",), job_levels=(2,)).select(frame).index.tolist() == [1]
     assert len(AnalyticsFilter().select(frame)) == 3
 
 
+# Test: risk bands cover every score.
 def test_risk_bands_cover_every_score():
     assert MAX_RISK_SCORE == 14 and len(RISK_FACTORS) == 11
     lows = [low for low, _ in RISK_BANDS]

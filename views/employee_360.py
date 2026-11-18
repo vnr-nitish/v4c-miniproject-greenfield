@@ -11,16 +11,20 @@ from src.models.employee import GENDERS, MARITAL_STATUSES
 from src.ui.common import announce, attempt, data_changed, fact_cards, page_header, show_announcement
 from src.ui.forms import position_picker
 
+# show at most 50 matches
 SEARCH_LIMIT = 50
 
 page_header("Employee 360")
 show_announcement()
+# the object that reads and saves employees
 em = EmployeeManager()
 
 
+# READ: everything this page shows comes through the managers (hr_oltp tables and the warehouse history).
 def read_employee(employee_id: int) -> tuple:
     """Everything this page shows about one employee, on one connection: 12 round trips to the
     database instead of 40, and each one takes about 0.25 s from the live site."""
+    # all five reads on one connection: faster
     with em.read_session():
         return (em.get(employee_id), em.profile(employee_id), em.history(employee_id),
                 ReviewManager().reviews_for(employee_id), ProjectManager().assignments_for(employee_id))
@@ -28,6 +32,7 @@ def read_employee(employee_id: int) -> tuple:
 
 def pick_from_matches(found: pd.DataFrame, query: str) -> int | None:
     """Which employee to show: the one exact match or only match, else the row the user clicks."""
+    # one exact match (or only one match at all): open it; otherwise the user clicks a row
     exact = found[found.match_rank == 0]
     if len(exact) == 1:
         return int(exact.employee_id.iloc[0])
@@ -35,6 +40,7 @@ def pick_from_matches(found: pd.DataFrame, query: str) -> int | None:
         return int(found.employee_id.iloc[0])
     st.caption(f"{'The first ' if len(found) == SEARCH_LIMIT else ''}{len(found)} matches — click a row to open that employee.")
     table = found.assign(status=found.is_active.map(lambda active: "Active" if active else "Left"))
+    # a table where clicking a row selects that employee
     event = st.dataframe(table[["employee_code", "full_name", "email", "phone", "department_name", "job_role", "status"]],
                          hide_index=True, width="stretch", on_select="rerun", selection_mode="single-row",
                          key=f"e360_matches_{query}",
@@ -44,10 +50,12 @@ def pick_from_matches(found: pd.DataFrame, query: str) -> int | None:
     return int(found.employee_id.iloc[event.selection.rows[0]]) if event.selection.rows else None
 
 
+# '1 year' or '5 years'.
 def years(count: int) -> str:
     return f"{count} year" if count == 1 else f"{count} years"
 
 
+# The four cards on the Details tab: current position, employment, contact, background.
 def details(employee: Employee, profile: dict[str, Any], versions: int) -> dict[str, list[tuple[str, Any]]]:
     today = date.today()
     employment = [("Employee code", employee.employee_code), ("Employee ID", employee.employee_id),
@@ -76,30 +84,39 @@ def details(employee: Employee, profile: dict[str, Any], versions: int) -> dict[
     }
 
 
+# The 'Update > Position' tab. Saving calls EmployeeManager.change_position(): hr_oltp closes the current job
+# version and opens a new one, and in the same transaction dim_employee takes its SCD Type 2 step.
 def change_position(employee: Employee, profile: dict[str, Any]) -> None:
+    # today's position, so the form starts from it
     current = Position(department_id=profile["department_id"], job_role_id=profile["job_role_id"],
                        job_level_id=profile["job_level"], manager_id=profile["manager_id"],
                        monthly_income=profile["monthly_income"], stock_option_level=profile["stock_option_level"],
                        business_travel=profile["business_travel"])
+    # the same department -> role -> level form as on the Onboard page
     new = position_picker(f"change_{employee.employee_id}", current)
     c1, c2 = st.columns(2)
     effective = c1.date_input("Effective date", date.today(), max_value=date.today())
     reason = c2.selectbox("Reason", [None, "Promotion", "Transfer", "Role Change", "Manager Change",
                                      "Salary Revision"], format_func=lambda r: r or "Derive automatically")
+    # the save only happens when this button is clicked
     if st.button("Apply change", type="primary"):
+        # One transaction: sp_change_employee_position (OLTP) and sp_scd2_apply_employee (warehouse).
         change = attempt(lambda: em.change_position(employee.employee_id, Position(**new), effective, reason))
         if change:
             data_changed()
             columns = ["version_number", "department_name", "job_role", "job_level", "monthly_income",
                        "start_date", "end_date", "is_current"]
+            # pop-up with the two warehouse rows: the old one closed, the new one current
             announce("Position updated", f"{change.change_reason} recorded for {employee.full_name} — warehouse batch "
                      f"{change.batch_id}.", {"The old version was closed and a new one opened (SCD Type 2):":
                                              change.versions.tail(2)[columns]})
 
 
+# Personal details are SCD Type 1: corrected in place on every warehouse version, no new version.
 def edit_details(employee: Employee) -> None:
     ref = ReferenceDataManager()
     levels, fields = ref.education_levels(), ref.education_fields()
+    # a form filled in with today's details
     with st.form(f"details_{employee.employee_id}"):
         c1, c2, c3 = st.columns(3)
         first_name = c1.text_input("First name", employee.first_name)
@@ -120,6 +137,7 @@ def edit_details(employee: Employee) -> None:
         companies = c3.number_input("Previous employers", 0, 20, employee.prior_companies_count)
         submitted = st.form_submit_button("Save details", type="primary")
     if submitted:
+        # a validated copy with the new values, saved by the manager
         saved = attempt(lambda: em.update_details(employee.with_changes(
             first_name=first_name, last_name=last_name, email=email, phone=phone, gender=gender, marital_status=marital,
             date_of_birth=birth, distance_from_home_km=int(distance), prior_experience_years=int(experience),
@@ -143,6 +161,8 @@ def update_tab(employee: Employee, profile: dict[str, Any]) -> None:
         edit_details(employee)
 
 
+# Recording an exit: sp_record_exit sets the exit date and ends open project assignments, and the warehouse
+# is updated in the same transaction. Employees are never deleted.
 def exit_tab(employee: Employee, profile: dict[str, Any]) -> None:
     if not employee.is_active:
         st.info(f"{employee.full_name} left on {employee.exit_date}: {profile['exit_reason']}.")
@@ -155,6 +175,7 @@ def exit_tab(employee: Employee, profile: dict[str, Any]) -> None:
                                  format_func=dict(zip(reasons.exit_reason_id, reasons.reason_name)).get)
         submitted = st.form_submit_button("Record exit", type="primary")
     if submitted:
+        # save the exit: date and reason
         closed = attempt(lambda: em.record_exit(employee.employee_id, exit_date, int(reason_id)))
         if closed is not None:
             data_changed()
@@ -162,18 +183,22 @@ def exit_tab(employee: Employee, profile: dict[str, Any]) -> None:
                      "the warehouse updated.")
 
 
+# Search by name, e-mail, phone, employee code or id (EmployeeManager.search builds the SQL).
 query = st.text_input("Search", key="e360_search", placeholder="Name, e-mail, phone number or employee ID")
 if not query.strip():
     st.stop()
+# find the matching employees
 found = attempt(lambda: em.search(query, active_only=False, limit=SEARCH_LIMIT))
 if found is None:
     st.stop()
 if found.empty:
     st.info(f"No employee matches “{query.strip()}”. Try part of a name, an e-mail, a phone number or an employee ID.")
     st.stop()
+# decide which employee to open
 employee_id = pick_from_matches(found, query)
 if employee_id is None:
     st.stop()
+# read everything about that employee
 loaded = attempt(lambda: read_employee(employee_id))
 if not loaded:
     st.stop()
@@ -181,6 +206,7 @@ employee, profile, history, reviews, assignments = loaded
 
 st.markdown(f"### {employee.full_name} · {employee.employee_code} "
             f"{'🟢 active' if employee.is_active else '⚪ left ' + str(employee.exit_date)}")
+# the five tabs, each filled below
 tab_details, tab_timeline, tab_update, tab_work, tab_exit = st.tabs(
     ["Details", "Career timeline", "Update", "Reviews & projects", "Exit"])
 with tab_details:

@@ -9,6 +9,7 @@ import plotly.graph_objects as go
 import plotly.io as pio
 import streamlit as st
 
+# The colours: each department, risk band and priority always has the same colour.
 PALETTE = ["#6366F1", "#14B8A6", "#F59E0B", "#EC4899", "#3B82F6", "#84CC16", "#F97316"]
 DEPARTMENT_COLORS = {"Human Resources": "#EC4899", "Research & Development": "#6366F1", "Sales": "#14B8A6"}
 BAND_COLORS = {"Low": "#22C55E", "Medium": "#3B82F6", "High": "#F59E0B", "Very high": "#EF4444"}
@@ -17,6 +18,7 @@ RISK_SCALE = ["#22C55E", "#FACC15", "#F97316", "#EF4444"]
 TILE_COLORS = ["#6366F1", "#14B8A6", "#F59E0B", "#EC4899", "#3B82F6", "#84CC16", "#F97316"]
 TEXT, MUTED, GRID = "#E5E7EB", "#94A3B8", "rgba(148,163,184,0.16)"
 
+# The page styles (CSS): the title band, the tiles, the cards and the forms.
 CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
@@ -50,10 +52,12 @@ div[data-testid="stMetric"] { background: #111A2E; border-radius: 14px; padding:
 """
 
 
+# Adds the styles to the page.
 def inject_css() -> None:
     st.markdown(CSS, unsafe_allow_html=True)
 
 
+# A Plotly chart style that matches the dark pages: background, fonts, grid and legend.
 def _register_template() -> None:
     axis = dict(gridcolor=GRID, zerolinecolor=GRID, linecolor=GRID, color=MUTED)
     pio.templates["hr_dark"] = go.layout.Template(layout=dict(
@@ -66,4 +70,5 @@ def _register_template() -> None:
     pio.templates.default = "plotly_dark+hr_dark"
 
 
+# set the chart style once, when this file is first imported
 _register_template()

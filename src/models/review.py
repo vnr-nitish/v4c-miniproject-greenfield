@@ -11,6 +11,7 @@ from src.models.base import Entity, Rules, as_date, as_decimal, in_range, is_dat
 RATING_LABELS = {1: "Low", 2: "Good", 3: "Excellent", 4: "Outstanding"}
 
 
+# OOP (Inheritance): mirrors hr_oltp.performance_reviews; one review per employee and year.
 @dataclass(frozen=True)
 class Review(Entity):
     """The review of one employee for one performance year, usually held early the next year."""
@@ -27,6 +28,7 @@ class Review(Entity):
     comments: str | None = None
     review_id: int | None = None
 
+    # Tidy the input: dates, an exact KPI score, 0/1 from the database becomes False/True, empty comments become None.
     def _normalize(self) -> None:
         self._set("review_date", as_date(self.review_date))
         self._set("kpi_score", as_decimal(self.kpi_score))
@@ -35,6 +37,7 @@ class Review(Entity):
         if isinstance(self.comments, str):
             self._set("comments", self.comments.strip() or None)
 
+    # Review rules: no self-review, held in the review year or the next, rating 1-4, KPI 0-100 ...
     def validation_errors(self) -> dict[str, str]:
         r = Rules()
         r.require(is_int(self.employee_id) and self.employee_id >= 1, "employee_id", "Choose an employee")
@@ -59,10 +62,12 @@ class Review(Entity):
 
     # ------------------------------------------------------------------ behaviour
 
+    # The rating as a word, e.g. 3 -> 'Excellent'.
     @property
     def rating_label(self) -> str:
         return RATING_LABELS[self.rating_id]
 
+    # True for the top rating (4).
     @property
     def is_outstanding(self) -> bool:
         return self.rating_id == max(RATING_LABELS)

@@ -17,24 +17,31 @@ from src.db_manager import DatabaseConnection
 logger = logging.getLogger(__name__)
 
 
+# OOP (Inheritance): reuses the Singleton pool. Writes the generated tables into hr_staging.
 class StagingLoader(DatabaseConnection):
     """Inherits the Singleton connection pool from DatabaseConnection."""
 
+    # the database the rows go into
     SCHEMA = "hr_staging"
 
+    # Loads every table; returns the rows and the speed per table.
     def load(self, frames: dict[str, pd.DataFrame], batch_id: int, batch_size: int = 5_000) -> dict[str, dict]:
         stats = {}
         for table, df in frames.items():
             started = time.perf_counter()
+            # the rows as plain Python values
             rows = self._rows(df, batch_id)
             columns = ["batch_id", *df.columns]
+            # one INSERT with a %s placeholder per column
             sql = (f"INSERT INTO {self.SCHEMA}.{table} ({', '.join(columns)}) "
                    f"VALUES ({', '.join(['%s'] * len(columns))})")
             with self.transaction() as cur:
+                # empty the staging table, then insert the rows 5,000 at a time (executemany: one round trip per batch)
                 cur.execute(f"TRUNCATE TABLE {self.SCHEMA}.{table}")
                 for i in range(0, len(rows), batch_size):
                     cur.executemany(sql, rows[i:i + batch_size])
             seconds = time.perf_counter() - started
+            # remember the row count and the speed, for the report
             stats[table] = {"rows": len(rows), "seconds": seconds, "rows_per_second": len(rows) / max(seconds, 1e-9)}
             logger.info("loaded %-16s %9d rows in %5.1fs", table, len(rows), seconds)
         return stats

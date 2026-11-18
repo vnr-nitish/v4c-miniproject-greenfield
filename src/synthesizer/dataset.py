@@ -37,10 +37,12 @@ STAGING_COLUMNS = {
 }
 
 
+# Holds the 6 generated tables and renames their columns to the hr_staging layout.
 @dataclass
 class SyntheticDataset:
     """Generator outputs (with internal helper columns) plus the derived staging frames."""
 
+    # the 6 generated tables
     employees: pd.DataFrame
     job_history: pd.DataFrame
     surveys: pd.DataFrame
@@ -62,12 +64,15 @@ class SyntheticDataset:
             "stg_projects": self.projects,
             "stg_assignments": self.assignments,
         }
+        # keep only the staging columns, in the staging order
         self.staging = {name: frames[name][cols].copy() for name, cols in STAGING_COLUMNS.items()}
         return self.staging
 
+    # Rows per staging table, for the report.
     def row_counts(self) -> dict[str, int]:
         return {name: len(df) for name, df in self.staging.items()}
 
+    # Saves each staging table as a CSV file, plus the list of planted problems.
     def to_csv(self, directory: Path) -> None:
         directory.mkdir(parents=True, exist_ok=True)
         for name, df in self.staging.items():
