@@ -7,11 +7,11 @@ __pycache__/
 .venv/
 venv/
 
-# Secrets (never commit credentials)
+# Secrets(never commit credentials)
 .env
 .streamlit/secrets.toml
 
-# Generated data (re-created by the synthesizer)
+# Generated data(re-created by the synthesizer)
 data/synthesized/
 *.log
 
@@ -21,6 +21,6 @@ data/synthesized/
 .DS_Store
 Thumbs.db
 
-# Other local settings files (keep .env.example)
+# Other local settings files(keep .env.example)
 .env.*
 !.env.example
